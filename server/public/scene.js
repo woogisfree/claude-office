@@ -108,6 +108,22 @@ function renderEmployee(e, t) {
   if (resting) drawMug(Math.round(e.x) + 5, Math.round(e.y) - 13, idleMin > 15 ? 0 : 1, t);
 }
 
+// 카페인 폭주 중인 직원의 책상 위로 서류가 솟아올랐다가 흩날리며 떨어진다. 위치는 시간의 함수라서 따로 상태를 저장하지 않는다.
+const PAPER_N = 6, PAPER_PERIOD = 1.9;
+function drawPapers(d, e, t) {
+  for (let i = 0; i < PAPER_N; i++) {
+    const u = (((t + e.seed * 0.37) / PAPER_PERIOD + i / PAPER_N) % 1 + 1) % 1; // 0~1: 한 장의 비행 진행도
+    const k = Math.floor((t + e.seed * 0.37) / PAPER_PERIOD + i / PAPER_N);       // 몇 번째 비행인지에 따라 방향을 바꾼다
+    const dir = ((k * 7 + i * 3 + e.seed) % 5) - 2;                               // -2 ~ 2
+    const x = d.x + 36 + dir * 7 * u + Math.sin(u * 9 + i) * 4;
+    const y = d.y + 26 - Math.sin(u * Math.PI) * (20 + (i % 3) * 5) + u * u * 14;
+    const w = 3 + Math.round(Math.abs(Math.cos(u * 11 + i * 2)) * 3);             // 뒤집히며 팔랑이는 모습
+    const px = Math.round(x), py = Math.round(y);
+    rect(px - 1, py - 1, w + 2, 6, OUT);
+    rect(px, py, w, 4, i % 2 ? '#fbf8ee' : '#e4dec9');
+    if (w > 4) { rect(px + 1, py + 1, w - 2, 1, '#9aa4b8'); rect(px + 1, py + 3, w - 3, 1, '#9aa4b8'); }
+  }
+}
 function frame(t) {
   ctx.imageSmoothingEnabled = false;
   const lights = [];
@@ -130,6 +146,7 @@ function frame(t) {
     items.push({ key: e.walking || e.leaving ? e.y + 2 : e.phase === 'rest' ? d.y + 46 : d.y + 34.5, fn: () => renderEmployee(e, t) });
   }
   items.sort((a, b) => a.key - b.key).forEach((i) => i.fn());
+  for (const e of emps.values()) if (e.hot && e.phase === 'seated' && !e.walking && !e.leaving && e.x !== -100) drawPapers(deskPos(e.desk), e, t);
   drawMotes(t);
   drawNight(lights);
   drawText(t);
@@ -250,7 +267,14 @@ new ResizeObserver(() => resize()).observe(stage);
 function empAt(ev) {
   const r = cv.getBoundingClientRect(), x = (ev.clientX - r.left) / L.zoom, y = (ev.clientY - r.top) / L.zoom;
   let best = null;
-  for (const e of emps.values()) if (!e.leaving && e.x !== -100 && Math.abs(x - e.x) < 8 && y > e.y - 23 && y < e.y + 2) best = e;
+  for (const e of emps.values()) {
+    if (e.leaving || e.x === -100) continue;
+    // 직원 본인과, 그 직원의 책상 구역(모니터, 책상, 리클라이너, 이름표 포함) 어디든 같은 대상으로 취급한다.
+    const onBody = Math.abs(x - e.x) < 8 && y > e.y - 23 && y < e.y + 2;
+    const d = deskPos(e.desk);
+    const onDesk = x >= d.x && x < d.x + CELL_W && y >= d.y && y < d.y + CELL_H;
+    if (onBody || onDesk) best = e;
+  }
   return best;
 }
 tcv.addEventListener('mousemove', (ev) => { const e = empAt(ev), id = e ? e.id : null; if (id !== hoverId) { hoverId = id; onHover(id); } tcv.style.cursor = e ? 'pointer' : 'default'; });
