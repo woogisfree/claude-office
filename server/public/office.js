@@ -21,7 +21,12 @@ const PLANT = [
 ];
 const CLAWD = ['.oooooo.', 'oddddddo', 'odeddedo', 'oddddddo', '.o.oo.o.'];
 const spPlant = () => cached('plant', () => compile(PLANT, { g: '#6aa84a', G: '#3f7a35', o: OUT, p: '#c07a4a', P: '#8a5230' }));
-const spClawd = () => cached('clawd', () => compile(CLAWD, { o: OUT, d: '#e0805e', e: '#2a1a14' }));
+const CLAWD_PAL = { d: '#e07a55', e: '#1a0f0a' };
+const CLAWD_L = ['..dddddddddddd..', '..dddddddddddd..', '..ddeddddddedd..', '..ddeddddddedd..', 'dddddddddddddddd', 'dddddddddddddddd', '..dddddddddddd..', '..dddddddddddd..', '...d.d....d.d...', '...d.d....d.d...'];
+const CLAWD_L_BLINK = CLAWD_L.map((r) => r.replace(/e/g, 'd'));
+const CLAWD_S = ['.dddddd.', '.dedded.', 'dddddddd', '.dddddd.', '.d.dd.d.'];
+const spClawdL = (blink) => cached(blink ? 'clawdLb' : 'clawdL', () => compile(blink ? CLAWD_L_BLINK : CLAWD_L, CLAWD_PAL));
+const spClawdS = () => cached('clawdS', () => compile(CLAWD_S, CLAWD_PAL));
 
 function drawRoom(t) {
   const p = pal();
@@ -95,17 +100,23 @@ function drawMonitor(x, y, mode, t, seed) {
   pbox(x, y, 24, 19, '#4a4f5e', '#6b7186', '#363a46');
   rect(x + 2, y + 2, 20, 13, mode === 'off' ? '#15161c' : '#0b1b28');
   if (mode === 'code') {
+    // 클로드 코드 시작 화면처럼 위쪽에 로고, 아래쪽에 흘러가는 코드 세 줄을 보여 준다.
+    ctx.drawImage(spClawdS(), x + 3, y + 3);
     const sc = Math.floor(t * 3);
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 3; i++) {
       const ln = sc + i, w = 3 + (hh(seed, ln) % 11), ind = (hh(seed, ln + 99) % 3) * 2;
-      rect(x + 3 + ind, y + 3 + i * 2, Math.min(w, 17 - ind), 1, ['#7ee787', '#79c0ff', '#ffa657', '#d2a8ff', '#e8e8f0'][hh(seed, ln + 7) % 5]);
+      rect(x + 3 + ind, y + 9 + i * 2, Math.min(w, 17 - ind), 1, ['#7ee787', '#79c0ff', '#ffa657', '#d2a8ff', '#e8e8f0'][hh(seed, ln + 7) % 5]);
     }
-    if (Math.floor(t * 2) % 2) rect(x + 18, y + 12, 2, 2, '#fff');
+    if (Math.floor(t * 2) % 2) rect(x + 18, y + 13, 2, 1, '#fff');
   } else if (mode === 'saver') {
-    const bw = 10, bh = 6, px = Math.floor(t * 7 + seed) % (bw * 2), py = Math.floor(t * 5 + seed * 2) % (bh * 2);
-    ctx.drawImage(spClawd(), x + 3 + (px < bw ? px : bw * 2 - px), y + 3 + (py < bh ? py : bh * 2 - py));
+    // 쉬는 중에는 큰 로고가 화면 가운데에서 가끔 눈을 깜빡인다.
+    const blink = (Math.floor(t * 10) + seed * 7) % 34 === 0;
+    ctx.drawImage(spClawdL(blink), x + 4, y + 3);
   } else if (mode === 'desktop') {
-    rect(x + 2, y + 2, 20, 13, '#2e5282'); rect(x + 2, y + 10, 20, 5, '#3d6aa0'); rect(x + 4, y + 4, 8, 6, '#e9eef5'); rect(x + 4, y + 4, 8, 1, '#7a98c8');
+    // 승인을 기다리는 중에는 작은 로고 옆에서 물음표가 깜빡인다.
+    ctx.drawImage(spClawdS(), x + 3, y + 3);
+    if (Math.floor(t * 2) % 2) { rect(x + 14, y + 3, 4, 1, '#f4c24c'); rect(x + 17, y + 4, 1, 2, '#f4c24c'); rect(x + 15, y + 6, 2, 1, '#f4c24c'); rect(x + 15, y + 8, 2, 1, '#f4c24c'); }
+    for (let i = 0; i < 2; i++) rect(x + 3, y + 10 + i * 2, 8 + i * 4, 1, '#6f7a90');
   }
   if (mode !== 'off') { ctx.fillStyle = 'rgba(255,255,255,.12)'; for (let k = 0; k < 5; k++) ctx.fillRect(x + 3 + k, y + 9 - k, 2, 1); }
 }
@@ -170,14 +181,14 @@ function drawDeskBlock(d, emp, t) {
 
 function drawChairBack(d) { pbox(d.x + 4, d.y + 15, 15, 17, '#4b5a86', '#6a7bb0', '#35416a'); }
 function drawReclinerBack(d) {
-  const p = pal(), x = d.x + 56, y = d.y + 16;
+  const p = pal(), x = d.x + 56, y = d.y + 6;
   rect(x + 2, y + 32, 22, 3, 'rgba(0,0,0,.18)');
   if (theme === 'mine') { pbox(x + 2, y + 10, 20, 24, p.rest, p.restHi, p.restLo); for (let k = 0; k < 3; k++) rect(x + 4, y + 16 + k * 6, 16, 1, p.restLo); return; }
   if (theme === 'xmas') { pbox(x + 2, y + 4, 20, 30, '#8a5a3c', '#b07a52', '#5e3c28'); pbox(x + 5, y, 14, 8, '#fff', '#fff', '#dde'); return; }
   pbox(x + 2, y + 2, 20, 32, p.rest, p.restHi, p.restLo); pbox(x + 6, y - 2, 12, 8, p.restHi, '#a3b4dc', p.rest);
 }
 function drawReclinerFront(d) {
-  const p = pal(), x = d.x + 56, y = d.y + 16;
+  const p = pal(), x = d.x + 56, y = d.y + 6;
   if (theme === 'mine') { pbox(x, y + 24, 24, 12, p.restHi, '#b8926a', p.rest); return; }
   if (theme === 'xmas') { pbox(x, y + 30, 24, 4, '#6a4026', '#8a5a3c', '#4a2c1a'); return; }
   pbox(x - 1, y + 20, 6, 18, p.rest, p.restHi, p.restLo); pbox(x + 19, y + 20, 6, 18, p.rest, p.restHi, p.restLo);

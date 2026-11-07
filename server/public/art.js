@@ -79,14 +79,14 @@ function drawChar(x, y, lk, o, t) {
   const legName = step < 0 ? 'idle' : step === 0 ? 'a' : step === 2 ? 'b' : 'idle';
   const bob = o.walking && step % 2 === 1 ? 1 : 0;
   const jx = o.jitter && Math.floor(t * 7) % 2 ? 1 : 0; // 폭주 중에도 1px, 초당 약 3.5번만 살짝 흔든다.
-  const px = Math.round(x) - 6 + jx, py = Math.round(y) - 21 + bob;
+  const px = Math.round(x) - 6 + jx, py = Math.round(y) - 21 + bob + (o.sit ? 6 : 0); // 앉으면 몸이 의자 속으로 가라앉는다.
   const flip = o.flip && dir === 'side';
   const put = (img, dx, dy) => {
     if (flip) { ctx.save(); ctx.translate(Math.round(x) * 2 + jx * 2, 0); ctx.scale(-1, 1); ctx.drawImage(img, px + dx, py + dy); ctx.restore(); }
     else ctx.drawImage(img, px + dx, py + dy);
   };
   const lSpr = spr('legs', dir, legName, lk, pal);
-  put(lSpr, 0, 16);
+  if (!o.sit) put(lSpr, 0, 16); // 앉은 자세에서는 다리가 쿠션 뒤에 가려진다.
   put(spr('torso', dir, '', lk, pal), 0, 9);
   put(spr('head', dir, '', lk, pal), 0, 0);
   // 소품과 모자

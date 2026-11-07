@@ -289,6 +289,7 @@ async function collectSessions(force = false) {
     const waiting = s.status === 'waiting' || !!s.waitingFor;
     const item = {
       kind: 'session', sessionId: s.sessionId, pid: s.pid, cwd: s.cwd, startedAt: s.startedAt,
+      entrypoint: s.entrypoint || '', hostSessionId: DESKTOP_ID.test(s.hostSessionId || '') ? s.hostSessionId : '',
       name: s.name || sum.title || path.basename(s.cwd || '') || s.sessionId.slice(0, 8),
       title: sum.title || '', lastPrompt: sum.lastPrompt || '',
       status: waiting ? 'waiting' : s.status === 'busy' ? 'busy' : 'idle',
@@ -360,12 +361,19 @@ function outerApp(table, pid) {
   return app;
 }
 
+// Claude 데스크톱 앱의 세션 id 형식이다. 세션 파일의 hostSessionId가 이 형식이면 앱이 직접 그 세션 화면으로 이동할 수 있다.
+const DESKTOP_ID = /^local_[A-Za-z0-9-]{1,64}$/;
 async function focusSession(sessionId) {
   const { list } = await collectSessions(true);
   const s = list.find((x) => x.sessionId === sessionId);
   if (!s) return { app: null, tab: false };
   let target = s;
   if (s.kind === 'subagent') target = list.find((x) => x.sessionId === s.parentId) || s;
+  // 데스크톱 앱 세션: 앱이 처리하는 claude://code/continue 링크로 해당 세션 채팅을 연다. (공식 문서에는 없는 앱 내부 경로다.)
+  if (target.entrypoint === 'claude-desktop' && DESKTOP_ID.test(target.hostSessionId || '')) {
+    await sh('open', [`claude://code/continue?session=${encodeURIComponent(target.hostSessionId)}&source=claude_office`]);
+    return { app: 'Claude', tab: true };
+  }
   const table = await psTable();
   const env = await envOf(target.pid);
   const proc = table.get(target.pid);

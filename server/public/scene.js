@@ -14,16 +14,23 @@ const WAIT_KO = [[/permission/i, '권한 승인 요청'], [/plan/i, '계획 승�
 const waitingText = (w) => { if (!w) return '승인 대기'; for (const [re, ko] of WAIT_KO) if (re.test(w)) return ko; return w; };
 
 const seatPos = (d) => ({ x: d.x + 11, y: d.y + 34 });
-const restPos = (d) => ({ x: d.x + 68, y: d.y + 46 });
+const restPos = (d) => ({ x: d.x + 68, y: d.y + 36 });
 // 책상 줄 아래쪽의 빈 바닥을 지나는 가로 통로다. 책상, 모니터, 의자를 가로지르지 않도록 모든 이동은 이 통로와 세로 통로(aisle)로만 한다.
 const laneY = (d) => d.y + CELL_H - 4;
-const restRoute = (d) => [{ x: d.x + 11, y: laneY(d) }, { x: d.x + 68, y: laneY(d) }, restPos(d)];
+const sideX = (d) => d.x - GUTTER / 2; // 책상 왼쪽 옆길의 한가운데
+// 자리(책상 뒤)에서 나가려면 왼쪽 옆길로 내려가 아래 통로를 따라 리클라이너로 간다. 책상은 가로지르지 않는다.
+const restRoute = (d) => [{ x: sideX(d), y: seatPos(d).y }, { x: sideX(d), y: laneY(d) }, { x: d.x + 68, y: laneY(d) }, restPos(d)];
 const doorPos = () => ({ x: L.doorX, y: WALL_H - 2 });
 
+// 입장 경로의 앞부분이다. 책상 줄 아래 통로의 옆길 입구(decide 지점)에 닿았을 때 그 시점의 상태를 보고 자리로 갈지 리클라이너로 갈지 정한다.
 function entryPath(e) {
-  const s = seatPos(deskPos(e.desk));
-  const lane = laneY(deskPos(e.desk));
-  return [{ x: L.doorX, y: L.corrY }, { x: L.aisleX, y: L.corrY }, { x: L.aisleX, y: lane }, { x: s.x, y: lane }, s];
+  const d = deskPos(e.desk), lane = laneY(d);
+  return [{ x: L.doorX, y: L.corrY }, { x: L.aisleX, y: L.corrY }, { x: L.aisleX, y: lane }, { x: sideX(d), y: lane, decide: true }];
+}
+function entryTail(e) {
+  const d = deskPos(e.desk), s = seatPos(d), lane = laneY(d);
+  e.dest = e.data && e.data.status === 'idle' ? 'rest' : 'seat';
+  return e.dest === 'rest' ? [{ x: d.x + 68, y: lane }, restPos(d)] : [{ x: sideX(d), y: s.y }, s];
 }
 function nextDesk() { const used = new Set(deskOf.values()); let i = 0; while (used.has(i)) i++; return i; }
 
@@ -60,7 +67,10 @@ function applySessions(list) {
       const out = [{ x: L.aisleX, y: L.corrY }, { x: L.doorX, y: L.corrY }, doorPos()];
       // 자리에 있거나 쉬던 중이면 현재 x에서 아래 통로로 내려간 뒤 세로 통로로 이동한다. 어느 단계에서든 축을 따라서만 움직인다.
       const lane = laneY(d);
-      e.path = (e.visited.length && !e.seated ? trail : [{ x: e.x, y: lane }, { x: L.aisleX, y: lane }]).concat(out);
+      // 지금 걷는 경로의 끝에서 출발한다고 보고, 그곳이 리클라이너면 아래 통로로, 책상 자리면 왼쪽 옆길로 나간다.
+      const last = e.path.length ? e.path[e.path.length - 1] : { x: e.x, y: e.y };
+      const exitRoute = last.x > d.x + 40 ? [{ x: last.x, y: lane }, { x: L.aisleX, y: lane }] : [{ x: sideX(d), y: s.y }, { x: sideX(d), y: lane }, { x: L.aisleX, y: lane }];
+      e.path = (e.visited.length && !e.seated ? trail : e.path.concat(exitRoute)).concat(out);
       if (e.x === -100) { emps.delete(e.id); deskOf.delete(e.id); }
     }
   }
@@ -74,10 +84,11 @@ function step(e, dt, nowMs) {
     e.walking = true;
     if (dist <= mv) {
       e.x = tg.x; e.y = tg.y; e.path.shift();
+      if (tg.decide && !e.leaving && e.phase === 'enter') e.path = entryTail(e);
       if (!e.leaving && e.phase === 'enter') e.visited.push({ x: tg.x, y: tg.y });
       if (!e.path.length) {
         if (e.leaving) { emps.delete(e.id); deskOf.delete(e.id); return; }
-        if (e.phase === 'enter') { e.phase = 'seated'; e.seated = true; }
+        if (e.phase === 'enter') { e.phase = e.dest === 'rest' ? 'rest' : 'seated'; e.seated = true; }
         e.walking = false; e.face = 'front';
       }
     } else { e.x += (dx / dist) * mv; e.y += (dy / dist) * mv; }
@@ -101,7 +112,7 @@ function renderEmployee(e, t) {
   const idleMin = (Date.now() - (e.data.statusUpdatedAt || Date.now())) / 60000;
   const surprised = e.surprise > 0;
   const o = {
-    facing: e.walking ? e.face : e.sulk > 0 ? 'back' : 'front', flip: e.flip, walking: e.walking,
+    facing: e.walking ? e.face : e.sulk > 0 ? 'back' : 'front', flip: e.flip, walking: e.walking, sit: resting,
     typing: atDesk && st === 'busy', fast: e.hot, hand: atDesk && st === 'waiting', jitter: e.hot && atDesk,
     wide: e.hot || surprised, sleepy: resting && idleMin > 15, sweat: atDesk && st === 'busy' && e.data.failStreak >= 3,
     fire: theme === 'mine' && e.hot && atDesk,
@@ -110,7 +121,7 @@ function renderEmployee(e, t) {
   };
   const y = e.y - (surprised ? 3 : 0);
   e.headY = drawChar(e.x, y, e.look, o, t);
-  if (resting) drawMug(Math.round(e.x) + 5, Math.round(e.y) - 13, idleMin > 15 ? 0 : 1, t);
+  if (resting) drawMug(Math.round(e.x) + 5, Math.round(e.y) - 7, idleMin > 15 ? 0 : 1, t);
 }
 
 // 카페인 폭주 중인 직원의 책상 위로 서류가 솟아올랐다가 흩날리며 떨어진다. 위치는 시간의 함수라서 따로 상태를 저장하지 않는다.
@@ -142,13 +153,13 @@ function frame(t) {
     drawReclinerBack(d);
     items.push({ key: d.y + 30, fn: () => drawChairBack(d) });
     items.push({ key: d.y + 40, fn: () => drawDeskBlock(d, owner, t) });
-    items.push({ key: d.y + 46.5, fn: () => drawReclinerFront(d) });
+    items.push({ key: d.y + 36.5, fn: () => drawReclinerFront(d) });
     if (owner && owner.data.status !== 'idle') lights.push({ x: d.x + 36, y: d.y + 18 });
   }
   for (const e of emps.values()) {
     if (e.x === -100) continue;
     const d = deskPos(e.desk);
-    items.push({ key: e.walking || e.leaving ? e.y + 2 : e.phase === 'rest' ? d.y + 46 : d.y + 34.5, fn: () => renderEmployee(e, t) });
+    items.push({ key: e.walking || e.leaving ? e.y + 2 : e.phase === 'rest' ? d.y + 36 : d.y + 34.5, fn: () => renderEmployee(e, t) });
   }
   items.sort((a, b) => a.key - b.key).forEach((i) => i.fn());
   for (const e of emps.values()) if (e.hot && e.phase === 'seated' && !e.walking && !e.leaving && e.x !== -100) drawPapers(deskPos(e.desk), e, t);
@@ -265,7 +276,7 @@ function resize() {
     for (const e of [...emps.values()]) {
       if (e.x === -100) continue;
       if (e.leaving) { emps.delete(e.id); deskOf.delete(e.id); continue; }
-      if (e.path.length) { e.path = []; e.walking = false; if (e.phase === 'enter') { e.phase = 'seated'; e.seated = true; } }
+      if (e.path.length) { e.path = []; e.walking = false; if (e.phase === 'enter') { e.phase = e.data && e.data.status === 'idle' ? 'rest' : 'seated'; e.seated = true; } }
       const d = deskPos(e.desk), p = e.phase === 'rest' ? restPos(d) : seatPos(d); e.x = p.x; e.y = p.y;
     }
   }
@@ -283,7 +294,7 @@ function empAt(ev) {
     // 직원 본인과, 그 직원의 책상 구역(모니터, 책상, 리클라이너, 이름표 포함) 어디든 같은 대상으로 취급한다.
     const onBody = Math.abs(x - e.x) < 8 && y > e.y - 23 && y < e.y + 2;
     const d = deskPos(e.desk);
-    const onDesk = x >= d.x && x < d.x + CELL_W && y >= d.y && y < d.y + CELL_H;
+    const onDesk = x >= d.x - GUTTER && x < d.x - GUTTER + CELL_W && y >= d.y && y < d.y + CELL_H;
     if (onBody || onDesk) best = e;
   }
   return best;

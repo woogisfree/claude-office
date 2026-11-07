@@ -6,7 +6,7 @@ const stage = $('#stage');
 const tcv = $('#text'); // 글자는 고해상도 레이어에 따로 그린다.
 const tx = tcv.getContext('2d');
 
-const CELL_W = 80, CELL_H = 60, WALL_H = 70, CORR_H = 16, AISLE = 26, MARGIN = 8, MIN_DESKS = 20, RIGHT_COLS = 2;
+const CELL_W = 92, GUTTER = 12, CELL_H = 60, WALL_H = 70, CORR_H = 16, AISLE = 26, MARGIN = 8, MIN_DESKS = 20, RIGHT_COLS = 2;
 const params = new URLSearchParams(location.search);
 const ZOOMS = { small: 2, normal: 3, large: 4 };
 
@@ -37,7 +37,8 @@ function look(id) {
 const L = { gx: 0, rowPitch: 60, offX: 0, cw: 0, zoom: 2.5, leftCols: 1, cols: 3, rows: 7, desks: 21, W: 0, H: 0, aisleX: 0, doorX: 0, corrY: 0, top: 0 };
 function deskPos(i) {
   const row = Math.floor(i / L.cols), col = i % L.cols, pitchX = CELL_W + L.gx;
-  const x = L.offX + MARGIN + (col < L.leftCols ? col * pitchX : L.leftCols * pitchX + AISLE + (col - L.leftCols) * pitchX);
+  // 칸 왼쪽 GUTTER만큼은 책상 없이 비워 둔 옆길이다. 직원은 이 길로만 자리에 드나든다.
+  const x = L.offX + MARGIN + GUTTER + (col < L.leftCols ? col * pitchX : L.leftCols * pitchX + AISLE + (col - L.leftCols) * pitchX);
   // 줄 간격이 늘어난 만큼 위아래 여백도 반씩 나눠 첫 줄과 마지막 줄이 벽과 바닥에 붙지 않게 한다.
   const y = Math.round(L.top + row * L.rowPitch + (L.rowPitch - CELL_H) / 2);
   return { x, y, row, col };
