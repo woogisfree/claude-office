@@ -1,8 +1,8 @@
 // 테마별 방, 책상, 모니터, 의자, 서류 더미, 머그잔을 픽셀 단위로 그린다.
 const PAL = {
-  office: { wall: '#f6e9cb', stripe: '#f0e0bd', rail: '#e9d4a2', wains: '#8fae8b', wainsHi: '#a9c7a2', base: '#6b5a44', fA: '#e2bd88', fB: '#d9b27c', seam: '#bf9560', rug: '#6f9a8d', rugHi: '#b4d8c8', desk: '#c68e5c', deskHi: '#e6b684', deskLo: '#93633d', rest: '#d9915a', restHi: '#f0b584', restLo: '#a9683c' },
-  mine: { wall: '#4a3a2f', stripe: '#43342a', rail: '#6a5444', wains: '#33281f', wainsHi: '#46372b', base: '#1e1712', fA: '#5e4d3f', fB: '#564638', seam: '#3b2f26', rug: '#2e241d', rugHi: '#4a3b30', desk: '#7d7d86', deskHi: '#a4a4ae', deskLo: '#52525a', rest: '#7a5a3c', restHi: '#9a7650', restLo: '#58402a' },
-  xmas: { wall: '#2f6b46', stripe: '#2a5f3e', rail: '#d8c07a', wains: '#8a2b2b', wainsHi: '#a83838', base: '#5a1c1c', fA: '#e2d8c8', fB: '#d9cebd', seam: '#c0b4a0', rug: '#b33a3a', rugHi: '#d95a5a', desk: '#2f7a4e', deskHi: '#4ea072', deskLo: '#1f5236', rest: '#c24a4a', restHi: '#e06a6a', restLo: '#8a3030' },
+  office: { wall: '#f6e9cb', stripe: '#f0e0bd', rail: '#e9d4a2', wains: '#8fae8b', wainsHi: '#a9c7a2', base: '#6b5a44', fA: '#e2bd88', fB: '#d9b27c', seam: '#bf9560', rug: '#b9604a', rugHi: '#dc8f6b', rugEdge: '#f2dfb0', rugLine: '#9a4a38', desk: '#c68e5c', deskHi: '#e6b684', deskLo: '#93633d', rest: '#d9915a', restHi: '#f0b584', restLo: '#a9683c' },
+  mine: { wall: '#4a3a2f', stripe: '#43342a', rail: '#6a5444', wains: '#33281f', wainsHi: '#46372b', base: '#1e1712', fA: '#5e4d3f', fB: '#564638', seam: '#3b2f26', rug: '#2e241d', rugHi: '#4a3b30', rugEdge: '#6a5444', rugLine: '#241b15', desk: '#7d7d86', deskHi: '#a4a4ae', deskLo: '#52525a', rest: '#7a5a3c', restHi: '#9a7650', restLo: '#58402a' },
+  xmas: { wall: '#2f6b46', stripe: '#2a5f3e', rail: '#d8c07a', wains: '#8a2b2b', wainsHi: '#a83838', base: '#5a1c1c', fA: '#e2d8c8', fB: '#d9cebd', seam: '#c0b4a0', rug: '#b33a3a', rugHi: '#d95a5a', rugEdge: '#e8d9a8', rugLine: '#8a2b2b', desk: '#2f7a4e', deskHi: '#4ea072', deskLo: '#1f5236', rest: '#c24a4a', restHi: '#e06a6a', restLo: '#8a3030' },
 };
 const pal = () => PAL[theme] || PAL.office;
 const hh = (a, b) => hash(`${a},${b}`);
@@ -41,12 +41,21 @@ function drawRoom(t) {
     for (let k = 0; k < 3; k++) rect(hh(r, k) % L.W, y + 2 + (k % 3), 2, 1, p.fB);
   }
   // 복도(첫 줄 뒤)와 통로에는 러그를 깐다.
-  const rugs = [[L.offX, WALL_H, L.cw, CORR_H], [L.aisleX - AISLE / 2 + 2, L.top, AISLE - 4, L.H - L.top]];
+  // 복도와 세로 통로를 하나로 이어진 T자 러너 카펫으로 깐다. 바깥 외곽선, 크림색 테두리, 안쪽 바탕 순서로 겹쳐 그려서 이음매 없이 이어진다.
+  const rugs = [[L.offX, WALL_H, L.cw, CORR_H], [L.aisleX - AISLE / 2 + 2, WALL_H, AISLE - 4, L.H - WALL_H]];
+  for (const [rx, ry, rw, rh] of rugs) rect(rx - 1, ry - 1, rw + 2, rh + 2, OUT);
+  for (const [rx, ry, rw, rh] of rugs) rect(rx, ry, rw, rh, p.rugEdge);
+  for (const [rx, ry, rw, rh] of rugs) rect(rx + 2, ry + 2, rw - 4, rh - 4, p.rug);
+  // 안쪽 바탕에는 마름모 무늬를 전체 좌표 기준으로 그려서 두 카펫이 만나는 곳에서도 무늬가 끊기지 않는다.
   for (const [rx, ry, rw, rh] of rugs) {
-    rect(rx, ry, rw, rh, OUT); rect(rx + 1, ry + 1, rw - 2, rh - 2, p.rug);
-    for (let xx = rx + 3; xx < rx + rw - 3; xx += 6) for (let yy = ry + 3; yy < ry + rh - 3; yy += 6) rect(xx, yy, 2, 2, p.rugHi);
-    rect(rx + 2, ry + 2, rw - 4, 1, p.rugHi); rect(rx + 2, ry + rh - 3, rw - 4, 1, p.rugHi);
+    for (let xx = rx + 3; xx < rx + rw - 3; xx++) for (let yy = ry + 3; yy < ry + rh - 3; yy++) {
+      const mx = ((xx % 8) + 8) % 8, my = ((yy % 8) + 8) % 8;
+      if ((mx === 4 && my === 4) || (mx === 3 && my === 4) || (mx === 5 && my === 4) || (mx === 4 && my === 3) || (mx === 4 && my === 5)) rect(xx, yy, 1, 1, p.rugHi);
+      else if (mx === 0 && my === 0) rect(xx, yy, 1, 1, p.rugHi);
+    }
   }
+  // 테두리 안쪽에 얇은 줄을 한 번 더 둘러 카펫다운 마감을 준다.
+  for (const [rx, ry, rw, rh] of rugs) { rect(rx + 2, ry + 2, rw - 4, 1, p.rugLine); rect(rx + 2, ry + rh - 3, rw - 4, 1, p.rugLine); }
   // 통창과 벽 장식은 문 왼쪽 기준으로 시계, 화분, 창 순서로 놓는다. 열 수가 바뀌어도 함께 따라온다.
   const doorL = L.doorX - 14;
   if (theme === 'office') drawShafts();

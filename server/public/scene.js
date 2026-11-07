@@ -15,12 +15,15 @@ const waitingText = (w) => { if (!w) return '승인 대기'; for (const [re, ko]
 
 const seatPos = (d) => ({ x: d.x + 11, y: d.y + 34 });
 const restPos = (d) => ({ x: d.x + 68, y: d.y + 46 });
-const restRoute = (d) => [{ x: d.x + 58, y: d.y + 34 }, { x: d.x + 58, y: d.y + 46 }, restPos(d)];
+// 책상 줄 아래쪽의 빈 바닥을 지나는 가로 통로다. 책상, 모니터, 의자를 가로지르지 않도록 모든 이동은 이 통로와 세로 통로(aisle)로만 한다.
+const laneY = (d) => d.y + CELL_H - 4;
+const restRoute = (d) => [{ x: d.x + 11, y: laneY(d) }, { x: d.x + 68, y: laneY(d) }, restPos(d)];
 const doorPos = () => ({ x: L.doorX, y: WALL_H - 2 });
 
 function entryPath(e) {
   const s = seatPos(deskPos(e.desk));
-  return [{ x: L.doorX, y: L.corrY }, { x: L.aisleX, y: L.corrY }, { x: L.aisleX, y: s.y }, s];
+  const lane = laneY(deskPos(e.desk));
+  return [{ x: L.doorX, y: L.corrY }, { x: L.aisleX, y: L.corrY }, { x: L.aisleX, y: lane }, { x: s.x, y: lane }, s];
 }
 function nextDesk() { const used = new Set(deskOf.values()); let i = 0; while (used.has(i)) i++; return i; }
 
@@ -55,7 +58,9 @@ function applySessions(list) {
       // 자리에 닿기 전이면 지나온 길을 거꾸로 밟고, 자리에 있으면 통로로 나간다.
       const trail = e.visited.slice().reverse();
       const out = [{ x: L.aisleX, y: L.corrY }, { x: L.doorX, y: L.corrY }, doorPos()];
-      e.path = (e.visited.length && !e.seated ? trail : [{ x: L.aisleX, y: s.y }]).concat(out);
+      // 자리에 있거나 쉬던 중이면 현재 x에서 아래 통로로 내려간 뒤 세로 통로로 이동한다. 어느 단계에서든 축을 따라서만 움직인다.
+      const lane = laneY(d);
+      e.path = (e.visited.length && !e.seated ? trail : [{ x: e.x, y: lane }, { x: L.aisleX, y: lane }]).concat(out);
       if (e.x === -100) { emps.delete(e.id); deskOf.delete(e.id); }
     }
   }
@@ -256,7 +261,13 @@ function resize() {
   const sig = `${L.leftCols}|${L.desks}|${L.zoom}|${L.offX}|${L.gx}|${L.rowPitch}`;
   if (sig !== layoutSig) {
     layoutSig = sig;
-    for (const e of emps.values()) if (!e.walking && !e.leaving && !e.path.length && e.x !== -100) { const d = deskPos(e.desk), p = e.phase === 'rest' ? restPos(d) : seatPos(d); e.x = p.x; e.y = p.y; }
+    // 배치가 바뀌면 이동 중이던 경로의 좌표도 낡으므로, 걷던 직원은 도착지로 옮기고 퇴근하던 직원은 내보낸다. 낡은 좌표로 걸으면 대각선으로 가로지르게 된다.
+    for (const e of [...emps.values()]) {
+      if (e.x === -100) continue;
+      if (e.leaving) { emps.delete(e.id); deskOf.delete(e.id); continue; }
+      if (e.path.length) { e.path = []; e.walking = false; if (e.phase === 'enter') { e.phase = 'seated'; e.seated = true; } }
+      const d = deskPos(e.desk), p = e.phase === 'rest' ? restPos(d) : seatPos(d); e.x = p.x; e.y = p.y;
+    }
   }
   frame(performance.now() / 1000);
 }
