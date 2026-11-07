@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Office</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="top">
+  <h1>Claude Office</h1>
+  <div id="usage">
+    <div class="meter" id="u5"><span class="lbl">5시간</span><span class="bar"><i></i></span><span class="txt"></span></div>
+    <div class="meter" id="uw"><span class="lbl">주간</span><span class="bar"><i></i></span><span class="txt"></span></div>
+  </div>
+  <label id="timebox" title="창밖 시각 미리보기">
+    <input id="hour" type="range" min="0" max="24" step="0.25" value="12">
+    <span id="hourText">실제 시각</span>
+    <button id="hourReset" type="button">실제</button>
+  </label>
+  <button id="helpBtn" type="button" title="화면 설명">?</button>
+  <button id="panelBtn" type="button" title="세션 패널 접기/펴기">☰</button>
+</header>
+<main id="main">
+  <div id="stage"><div id="wrap"><canvas id="office"></canvas><canvas id="text"></canvas></div></div>
+  <aside id="panel">
+    <div id="filters">
+      <select id="fStatus">
+        <option value="all">전체 상태</option>
+        <option value="waiting">승인 대기</option>
+        <option value="busy">일하는 중</option>
+        <option value="idle">쉬는 중</option>
+      </select>
+      <select id="fProject"><option value="all">전체 프로젝트</option></select>
+    </div>
+    <div id="cards"></div>
+  </aside>
+</main>
+<div id="toast"></div>
+<div id="missing" hidden>
+  <div class="box"><b>세션 폴더를 찾지 못했습니다.</b><p><code>~/.claude/sessions</code> 폴더가 없습니다. Claude Code를 한 번 실행하면 자동으로 닫힙니다.</p></div>
+</div>
+<div id="help" hidden></div>
+<script src="layout.js"></script>
+<script src="sky.js"></script>
+<script src="art.js"></script>
+<script src="office.js"></script>
+<script src="scene.js"></script>
+<script src="help.js"></script>
+<script src="panel.js"></script>
+</body>
+</html>
