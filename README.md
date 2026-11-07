@@ -31,18 +31,21 @@
 
 ## 요구 환경
 
-- macOS 13 이상, Apple Silicon (arm64)
+- macOS 13 이상 (Apple Silicon과 Intel 모두 지원, 빌드할 때 자동으로 맞춥니다)
 - Node.js 18 이상 (22에서 개발)
-- Swift 컴파일러 (Xcode 또는 Command Line Tools)
+- Swift 컴파일러: Xcode 또는 Command Line Tools (`xcode-select --install`)
 
 ## 빌드와 실행
 
 ```bash
+git clone https://github.com/woogisfree/claude-office
+cd claude-office
 ./build.sh
-open "build/Claude Office.app"
 ```
 
-Xcode 프로젝트 없이 `swiftc`로 빌드하고 ad-hoc 서명을 합니다. 서명된 배포용 바이너리는 제공하지 않으므로 직접 빌드해서 사용해야 합니다.
+`./build.sh`는 Swift와 Node가 설치되어 있는지 먼저 확인하고(없으면 설치 방법을 안내합니다), 앱을 빌드한 뒤 바로 실행합니다. 이미 실행 중인 앱은 종료하고 새 버전으로 다시 엽니다. 빌드만 하려면 `./build.sh --no-open`을 사용합니다.
+
+Xcode 프로젝트 없이 `swiftc`로 빌드하고 ad-hoc 서명을 합니다. 서명된 배포용 바이너리는 제공하지 않으므로 직접 빌드해서 사용해야 합니다. 직접 빌드한 앱은 Gatekeeper에 막히지 않습니다.
 
 `/Applications`에 설치하려면 빌드한 앱을 복사합니다. 실행 중이면 먼저 종료해야 합니다.
 
