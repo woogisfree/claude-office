@@ -124,20 +124,32 @@ function renderEmployee(e, t) {
   if (resting) drawMug(Math.round(e.x) + 5, Math.round(e.y) - 7, idleMin > 15 ? 0 : 1, t);
 }
 
-// 카페인 폭주 중인 직원의 책상 위로 서류가 솟아올랐다가 흩날리며 떨어진다. 위치는 시간의 함수라서 따로 상태를 저장하지 않는다.
-const PAPER_N = 6, PAPER_PERIOD = 1.9;
+// 카페인 폭주 중인 직원의 서류 더미 뒤에서 종이가 떠올랐다가 팔랑이며 책상 뒤로 내려앉는다. 위치는 시간의 함수라서 따로 상태를 저장하지 않는다.
+const PAPER_N = 5, PAPER_PERIOD = 2.6;
+const PAPER_PAL = { o: 'rgba(75,52,48,.7)', w: '#fbf8ee', l: '#b9b29c', s: '#e4dec9' };
+const PAPER_FRAMES = [
+  ['.oooo', 'owwwo', 'owllo', 'owwwo', 'owllo', 'ooooo'],   // 정면
+  ['.ooooo', 'owwwlo', 'owlwso', 'ooooo.'],                // 기울어짐
+  ['oo', 'ow', 'ow', 'ow', 'ow', 'oo'],                    // 옆면
+  ['ooooo.', 'olwwwo', 'oswlwo', '.ooooo'],                // 반대로 기울어짐
+];
+const paperSpr = (k) => cached('paper' + k, () => compile(PAPER_FRAMES[k], PAPER_PAL));
 function drawPapers(d, e, t) {
+  const sx = d.x + 51, sy = d.y + 25; // 서류 더미 윗면
   for (let i = 0; i < PAPER_N; i++) {
-    const u = (((t + e.seed * 0.37) / PAPER_PERIOD + i / PAPER_N) % 1 + 1) % 1; // 0~1: 한 장의 비행 진행도
-    const k = Math.floor((t + e.seed * 0.37) / PAPER_PERIOD + i / PAPER_N);       // 몇 번째 비행인지에 따라 방향을 바꾼다
-    const dir = ((k * 7 + i * 3 + e.seed) % 5) - 2;                               // -2 ~ 2
-    const x = d.x + 36 + dir * 7 * u + Math.sin(u * 9 + i) * 4;
-    const y = d.y + 26 - Math.sin(u * Math.PI) * (20 + (i % 3) * 5) + u * u * 14;
-    const w = 3 + Math.round(Math.abs(Math.cos(u * 11 + i * 2)) * 3);             // 뒤집히며 팔랑이는 모습
-    const px = Math.round(x), py = Math.round(y);
-    rect(px - 1, py - 1, w + 2, 6, OUT);
-    rect(px, py, w, 4, i % 2 ? '#fbf8ee' : '#e4dec9');
-    if (w > 4) { rect(px + 1, py + 1, w - 2, 1, '#9aa4b8'); rect(px + 1, py + 3, w - 3, 1, '#9aa4b8'); }
+    const ph = (t + e.seed * 0.37) / PAPER_PERIOD + i / PAPER_N;
+    const u = ((ph % 1) + 1) % 1;                              // 0~1: 한 장의 비행 진행도
+    const k = Math.floor(ph);                                    // 몇 번째 비행인지에 따라 방향과 높이를 바꾼다
+    const r = (k * 7 + i * 5 + e.seed) % 5;
+    const dir = [-0.5, -1.1, -1.7, -2.3, -0.9][r], peak = 22 + ((k + i) % 3) * 4;
+    const x = sx + dir * 9 * u + Math.sin(u * 6.5 + i * 1.7) * 2.5;      // 좌우로 흔들리며 나아간다
+    const y = sy - peak * 4 * u * (1 - u) * (1 - 0.35 * u) + 7 * u * u;  // 포물선으로 솟았다가 천천히 내려앉는다
+    const alpha = Math.min(1, u / 0.1, (1 - u) / 0.18);
+    const spr = paperSpr(Math.floor(u * 9 + i * 2) % 4);
+    const px = Math.round(x - spr.width / 2), py = Math.round(y - spr.height / 2);
+    ctx.globalAlpha = Math.max(0, alpha);
+    ctx.drawImage(spr, px, py);
+    ctx.globalAlpha = 1;
   }
 }
 function frame(t) {
@@ -159,10 +171,10 @@ function frame(t) {
   for (const e of emps.values()) {
     if (e.x === -100) continue;
     const d = deskPos(e.desk);
+    if (e.hot && e.phase === 'seated' && !e.walking && !e.leaving) items.push({ key: d.y + 35.5, fn: () => drawPapers(d, e, t) }); // 책상과 모니터보다 뒤, 직원보다 앞
     items.push({ key: e.walking || e.leaving ? e.y + 2 : e.phase === 'rest' ? d.y + 36 : d.y + 34.5, fn: () => renderEmployee(e, t) });
   }
   items.sort((a, b) => a.key - b.key).forEach((i) => i.fn());
-  for (const e of emps.values()) if (e.hot && e.phase === 'seated' && !e.walking && !e.leaving && e.x !== -100) drawPapers(deskPos(e.desk), e, t);
   drawMotes(t);
   drawNight(lights);
   drawText(t);
