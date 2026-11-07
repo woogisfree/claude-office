@@ -49,12 +49,19 @@ function computeLayout(count) {
   let z = baseZoom;
   // 왼쪽 묶음을 0열까지 줄여도 넘칠 때만 배율을 줄인다. 줄일 때도 가능하면 정수 배율로 맞춘다.
   if (widthOf(0) * z > availW) { z = Math.floor(availW / widthOf(0)); if (z < 1) z = availW / widthOf(0); }
-  const Wv = Math.floor(availW / z), Hv = Math.floor(availH / z); // 창을 빈틈없이 채우는 가상 크기
-  const left = Math.max(0, Math.min(MAX_LEFT, Math.floor((Wv - 2 * MARGIN - AISLE - RIGHT_COLS * CELL_W) / CELL_W)));
-  L.zoom = z; L.leftCols = left; L.cols = left + RIGHT_COLS;
   L.top = WALL_H + CORR_H;
+  const metrics = (zz) => {
+    const Wv = Math.floor(availW / zz), Hv = Math.floor(availH / zz); // 창을 빈틈없이 채우는 가상 크기
+    const left = Math.max(0, Math.min(MAX_LEFT, Math.floor((Wv - 2 * MARGIN - AISLE - RIGHT_COLS * CELL_W) / CELL_W)));
+    return { Wv, Hv, left };
+  };
+  let m = metrics(z);
+  // 세션이 창 높이에 다 들어가지 않으면 배율을 한 단계씩 줄여 한 화면에 담는다. 최소 배율은 2이고, 그래도 넘치면 스크롤한다.
+  while (z > 2 && L.top + Math.max(1, Math.ceil(count / (m.left + RIGHT_COLS))) * CELL_H + 16 > m.Hv) { z -= 1; m = metrics(z); }
+  const { Wv, Hv, left } = m;
+  L.zoom = z; L.leftCols = left; L.cols = left + RIGHT_COLS;
   // 줄 수는 세션 수와 창 높이에 맞춘다. 세션이 창에 다 들어가면 스크롤 없이 한 화면을 채우고, 넘칠 때만 스크롤한다.
-  const fitRows = Math.max(2, Math.floor((Hv - L.top - 16) / CELL_H));
+  const fitRows = Math.max(1, Math.floor((Hv - L.top - 16) / CELL_H));
   L.rows = Math.max(Math.ceil(count / L.cols), fitRows);
   L.desks = L.rows * L.cols;
   // 남는 공간은 열 사이(최대 28)와 줄 사이(최대 1.5배)의 간격으로 나눠 책상을 화면에 맞게 퍼뜨린다.
