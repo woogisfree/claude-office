@@ -19,13 +19,9 @@ const PLANT = [
   '......gg......', '..gg..gGg..gg.', '.gGgg.gGg.gGg.', '.gGGggggggGGg.', '..gGGgggggGg..', '...ggGgGggg...', '....ggGGgg....',
   '.....gGGg.....', '......GG......', '......GG......', '..oooooooooo..', '..opppppppPo..', '...opppppPo...', '...opppppPo...', '...oPPPPPPo...', '....oooooo....',
 ];
-const CLAWD = ['.oooooo.', 'oddddddo', 'odeddedo', 'oddddddo', '.o.oo.o.'];
 const spPlant = () => cached('plant', () => compile(PLANT, { g: '#6aa84a', G: '#3f7a35', o: OUT, p: '#c07a4a', P: '#8a5230' }));
 const CLAWD_PAL = { d: '#e07a55', e: '#1a0f0a' };
-const CLAWD_L = ['..dddddddddddd..', '..dddddddddddd..', '..ddeddddddedd..', '..ddeddddddedd..', 'dddddddddddddddd', 'dddddddddddddddd', '..dddddddddddd..', '..dddddddddddd..', '...d.d....d.d...', '...d.d....d.d...'];
-const CLAWD_L_BLINK = CLAWD_L.map((r) => r.replace(/e/g, 'd'));
 const CLAWD_S = ['.dddddd.', '.dedded.', 'dddddddd', '.dddddd.', '.d.dd.d.'];
-const spClawdL = (blink) => cached(blink ? 'clawdLb' : 'clawdL', () => compile(blink ? CLAWD_L_BLINK : CLAWD_L, CLAWD_PAL));
 const spClawdS = () => cached('clawdS', () => compile(CLAWD_S, CLAWD_PAL));
 
 function drawRoom(t) {
@@ -100,23 +96,18 @@ function drawMonitor(x, y, mode, t, seed) {
   pbox(x, y, 24, 19, '#4a4f5e', '#6b7186', '#363a46');
   rect(x + 2, y + 2, 20, 13, mode === 'off' ? '#15161c' : '#0b1b28');
   if (mode === 'code') {
-    // 클로드 코드 시작 화면처럼 위쪽에 로고, 아래쪽에 흘러가는 코드 세 줄을 보여 준다.
-    ctx.drawImage(spClawdS(), x + 3, y + 3);
     const sc = Math.floor(t * 3);
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 6; i++) {
       const ln = sc + i, w = 3 + (hh(seed, ln) % 11), ind = (hh(seed, ln + 99) % 3) * 2;
-      rect(x + 3 + ind, y + 9 + i * 2, Math.min(w, 17 - ind), 1, ['#7ee787', '#79c0ff', '#ffa657', '#d2a8ff', '#e8e8f0'][hh(seed, ln + 7) % 5]);
+      rect(x + 3 + ind, y + 3 + i * 2, Math.min(w, 17 - ind), 1, ['#7ee787', '#79c0ff', '#ffa657', '#d2a8ff', '#e8e8f0'][hh(seed, ln + 7) % 5]);
     }
-    if (Math.floor(t * 2) % 2) rect(x + 18, y + 13, 2, 1, '#fff');
+    if (Math.floor(t * 2) % 2) rect(x + 18, y + 12, 2, 2, '#fff');
   } else if (mode === 'saver') {
-    // 쉬는 중에는 큰 로고가 화면 가운데에서 가끔 눈을 깜빡인다.
-    const blink = (Math.floor(t * 10) + seed * 7) % 34 === 0;
-    ctx.drawImage(spClawdL(blink), x + 4, y + 3);
+    // 쉬는 중에는 작은 로고가 화면 안을 튕기며 돌아다닌다.
+    const bw = 10, bh = 6, px = Math.floor(t * 7 + seed) % (bw * 2), py = Math.floor(t * 5 + seed * 2) % (bh * 2);
+    ctx.drawImage(spClawdS(), x + 3 + (px < bw ? px : bw * 2 - px), y + 3 + (py < bh ? py : bh * 2 - py));
   } else if (mode === 'desktop') {
-    // 승인을 기다리는 중에는 작은 로고 옆에서 물음표가 깜빡인다.
-    ctx.drawImage(spClawdS(), x + 3, y + 3);
-    if (Math.floor(t * 2) % 2) { rect(x + 14, y + 3, 4, 1, '#f4c24c'); rect(x + 17, y + 4, 1, 2, '#f4c24c'); rect(x + 15, y + 6, 2, 1, '#f4c24c'); rect(x + 15, y + 8, 2, 1, '#f4c24c'); }
-    for (let i = 0; i < 2; i++) rect(x + 3, y + 10 + i * 2, 8 + i * 4, 1, '#6f7a90');
+    rect(x + 2, y + 2, 20, 13, '#2e5282'); rect(x + 2, y + 10, 20, 5, '#3d6aa0'); rect(x + 4, y + 4, 8, 6, '#e9eef5'); rect(x + 4, y + 4, 8, 1, '#7a98c8');
   }
   if (mode !== 'off') { ctx.fillStyle = 'rgba(255,255,255,.12)'; for (let k = 0; k < 5; k++) ctx.fillRect(x + 3 + k, y + 9 - k, 2, 1); }
 }
