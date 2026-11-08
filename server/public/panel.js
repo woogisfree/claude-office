@@ -113,36 +113,39 @@ window.setAppUsage = (raw) => {
   lastUsage = { ok: true, fiveHour: f, weekly: w, updatedAt: Date.now() };
   renderUsage();
 };
-window.setAppUsageState = (st) => { appState = st; if (st !== 'ok' && Date.now() - appUsageAt > 150000) lastUsage = null; renderUsage(); };
+// 일시적인 실패(error)는 마지막 성공값을 그대로 두고 낡았다고 표시한다. 로그인이 풀린 경우(login)만 값을 지우고 로그인 안내를 보여 준다.
+window.setAppUsageState = (st) => { appState = st; if (st === 'login') lastUsage = null; renderUsage(); };
 const post = (m) => { try { window.webkit.messageHandlers.office.postMessage(m); } catch {} };
 
-function fmtLeft(sec) {
-  const m = Math.max(0, Math.round(sec / 60));
-  if (m < 60) return `${m}분`;
-  if (m < 1440) return `${Math.floor(m / 60)}시간 ${m % 60}분`;
-  return `${Math.floor(m / 1440)}일 ${Math.floor((m % 1440) / 60)}시간`;
-}
 function emptyText() {
   if (appState === 'login') return ['로그인 필요', '클릭하면 claude.ai 로그인 창이 열립니다.'];
   if (appState === 'error') return ['불러오기 실패', '잠시 뒤 다시 시도합니다. 계속 실패하면 로그 파일(~/Library/Logs/Claude Office.log)을 확인하세요.'];
   return ['정보 없음', '앱에서 claude.ai에 로그인하거나, Claude Code statusline이 한도 파일을 쓰면 표시됩니다.'];
 }
-function renderMeter(el, w, name) {
+// staleMs: 마지막 성공 뒤 지난 시간(밀리초). 0이 아니면 마지막으로 가져온 값을 흐리게 보여 준다.
+function renderMeter(el, w, name, staleMs = 0) {
   const txt = el.querySelector('.txt'), fill = el.querySelector('.bar i');
-  el.classList.remove('mid', 'low', 'none', 'click');
+  el.classList.remove('mid', 'low', 'none', 'click', 'stale');
   if (!w) { const [t, hint] = emptyText(); el.classList.add('none'); if (appState === 'login') el.classList.add('click'); fill.style.width = '0%'; txt.textContent = t; el.title = hint; return; }
   const expired = w.resetsAt && w.resetsAt * 1000 <= Date.now();
   const used = expired ? 0 : Math.min(100, Math.max(0, w.pct)), left = Math.round(100 - used);
   fill.style.width = left + '%';
   el.classList.toggle('mid', left <= 50 && left > 20); el.classList.toggle('low', left <= 20);
-  const reset = expired ? '초기화됨' : w.resetsAt ? `${fmtLeft(w.resetsAt - Date.now() / 1000)} 후 초기화` : '';
+  const stale = staleMs > 0 && !expired; // 초기화 시각이 지났으면 값이 낡았어도 100%로 돌아온 것이 확실하다.
+  const reset = expired ? '초기화됨' : stale ? `${fmtLeft(staleMs / 1000).replace(/ 0분$/, '')} 전 기준` : w.resetsAt ? `${fmtLeft(w.resetsAt - Date.now() / 1000)} 후 초기화` : '';
+  el.classList.toggle('stale', stale);
   txt.innerHTML = `<b>${left}%</b> 남음${reset ? ` <span class="reset">· ${reset}</span>` : ''}`;
-  el.title = `${name}: ${Math.round(used)}% 사용, ${left}% 남음${reset ? ' (' + reset + ')' : ''}`;
+  el.title = `${name}: ${Math.round(used)}% 사용, ${left}% 남음${reset ? ' (' + reset + ')' : ''}${stale ? '. 최신 값을 가져오지 못해 마지막으로 가져온 값을 보여 줍니다.' : ''}`;
 }
+const STALE_GRACE_MS = 150000, STALE_LIMIT_MS = 6 * 3600 * 1000;
 function renderUsage() {
-  const u = lastUsage;
-  renderMeter($('#u5'), u && u.ok ? u.fiveHour : null, '5시간 한도');
-  renderMeter($('#uw'), u && u.ok ? u.weekly : null, '주간 한도');
+  let u = lastUsage;
+  // 가져오기에 실패한 상태에서 마지막 성공 뒤 2분 30초가 지나면 낡은 값으로 표시하고, 6시간이 지나면 값을 포기한다.
+  const age = u && appState === 'error' ? Date.now() - (u.updatedAt || 0) : 0;
+  if (age > STALE_LIMIT_MS) u = null;
+  const stale = age > STALE_GRACE_MS ? age : 0;
+  renderMeter($('#u5'), u && u.ok ? u.fiveHour : null, '5시간 한도', stale);
+  renderMeter($('#uw'), u && u.ok ? u.weekly : null, '주간 한도', stale);
 }
 $('#usage').addEventListener('click', () => { if (appState === 'login') post('login'); });
 // 앱이 가져온 값이 최근이면 그것을 쓰고, 아니면 statusline이 쓴 파일을 읽는다.

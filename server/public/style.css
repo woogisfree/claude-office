@@ -12,6 +12,7 @@ html, body { margin:0; height:100%; background:var(--bg); color:var(--txt); font
 .meter.mid .bar i { background:var(--warn); } .meter.low .bar i { background:var(--red); }
 .meter .txt { color:var(--txt); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-variant-numeric:tabular-nums; }
 .meter.none .txt { color:var(--sub); }
+.meter.stale .bar { opacity:.5; } .meter.stale .txt { color:var(--sub); } .meter.stale .txt b { font-weight:600; }
 .meter.click { cursor:pointer; } .meter.click .txt { color:var(--warn); text-decoration:underline dotted; }
 @media (max-width: 1000px) { .meter .txt .reset { display:none; } }
 #timebox { display:flex; align-items:center; gap:6px; color:var(--sub); font-size:12px; }
