@@ -124,33 +124,36 @@ function renderEmployee(e, t) {
   if (resting) drawMug(Math.round(e.x) + 5, Math.round(e.y) - 7, idleMin > 15 ? 0 : 1, t);
 }
 
-// 카페인 폭주 중인 직원의 서류 더미 뒤에서 종이가 떠올랐다가 팔랑이며 책상 뒤로 내려앉는다. 위치는 시간의 함수라서 따로 상태를 저장하지 않는다.
-const PAPER_N = 5, PAPER_PERIOD = 2.6;
-const PAPER_PAL = { o: 'rgba(75,52,48,.7)', w: '#fbf8ee', l: '#b9b29c', s: '#e4dec9' };
-const PAPER_FRAMES = [
-  ['.oooo', 'owwwo', 'owllo', 'owwwo', 'owllo', 'ooooo'],   // 정면
-  ['.ooooo', 'owwwlo', 'owlwso', 'ooooo.'],                // 기울어짐
-  ['oo', 'ow', 'ow', 'ow', 'ow', 'oo'],                    // 옆면
-  ['ooooo.', 'olwwwo', 'oswlwo', '.ooooo'],                // 반대로 기울어짐
-];
-const paperSpr = (k) => cached('paper' + k, () => compile(PAPER_FRAMES[k], PAPER_PAL));
+// 카페인 폭주 중인 직원의 서류 더미에서 종이가 솟구쳤다가 흩날리며 떨어진다. 위치는 시간의 함수라서 따로 상태를 저장하지 않는다.
+const PAPER_N = 8, PAPER_PERIOD = 1.5;
+const PAPER_BASE = ['ooooooo', 'owwwwwo', 'owllllo', 'owwwwwo', 'owlllwo', 'owwwwwo', 'owllllo', 'owwwwwo', 'ooooooo'];
+const PAPER_PAL = { o: 'rgba(75,52,48,.6)', w: '#fbf8ee', l: '#b9b29c' };
+// 종이를 15도씩 돌린 열두 가지 모양을 미리 만든다. 종이는 180도 대칭이라 이 정도면 한 바퀴를 모두 표현한다.
+const paperSpr = (k) => cached('paperRot' + k, () => {
+  const c = document.createElement('canvas'); c.width = 13; c.height = 13;
+  const g = c.getContext('2d'), a = k * 15 * Math.PI / 180, cs = Math.cos(a), sn = Math.sin(a);
+  for (let y = 0; y < 13; y++) for (let x = 0; x < 13; x++) {
+    const vx = x + 0.5 - 6.5, vy = y + 0.5 - 6.5;
+    const sx = Math.floor(vx * cs + vy * sn + 3.5), sy = Math.floor(-vx * sn + vy * cs + 4.5);
+    const col = sx >= 0 && sx < 7 && sy >= 0 && sy < 9 ? PAPER_PAL[PAPER_BASE[sy][sx]] : null;
+    if (col) { g.fillStyle = col; g.fillRect(x, y, 1, 1); }
+  }
+  return c;
+});
 function drawPapers(d, e, t) {
   const sx = d.x + 51, sy = d.y + 25; // 서류 더미 윗면
   for (let i = 0; i < PAPER_N; i++) {
     const ph = (t + e.seed * 0.37) / PAPER_PERIOD + i / PAPER_N;
-    const u = ((ph % 1) + 1) % 1;                              // 0~1: 한 장의 비행 진행도
-    const k = Math.floor(ph);                                    // 몇 번째 비행인지에 따라 방향과 높이를 바꾼다
-    const r = (k * 7 + i * 5 + e.seed) % 5;
-    const dir = [-0.5, -1.1, -1.7, -2.3, -0.9][r], peak = 22 + ((k + i) % 3) * 4;
-    const x = sx + dir * 9 * u + Math.sin(u * 6.5 + i * 1.7) * 2.5;      // 좌우로 흔들리며 나아간다
-    const y = sy - peak * 4 * u * (1 - u) * (1 - 0.35 * u) + 7 * u * u;  // 포물선으로 솟았다가 천천히 내려앉는다
-    const alpha = Math.min(1, u / 0.1, (1 - u) / 0.18);
-    const spr = paperSpr(Math.floor(u * 9 + i * 2) % 4);
-    const px = Math.round(x - spr.width / 2), py = Math.round(y - spr.height / 2);
-    ctx.globalAlpha = Math.max(0, alpha);
-    ctx.drawImage(spr, px, py);
-    ctx.globalAlpha = 1;
+    const u = ((ph % 1) + 1) % 1, k = Math.floor(ph);                    // u: 한 장의 비행 진행도, k: 몇 번째 비행인지
+    const dir = (((k * 7 + i * 5 + e.seed) % 7) - 3) / 3;                  // -1 ~ 1: 비행마다 날아가는 방향이 달라진다
+    const peak = 26 + ((k + i) % 3) * 5;
+    const x = sx + dir * 30 * u + Math.sin(u * 7 + i * 1.7) * 4;           // 좌우로 흔들리며 퍼진다
+    const y = sy - peak * 4 * u * (1 - u) * (1 - 0.3 * u) + 14 * u * u;    // 포물선으로 솟았다가 천천히 내려앉는다
+    const deg = t * 160 + i * 50 + u * 260;                                // 빙글빙글 돌면서 난다
+    ctx.globalAlpha = Math.max(0, Math.min(1, u / 0.08, (1 - u) / 0.2));
+    ctx.drawImage(paperSpr(Math.floor((((deg % 180) + 180) % 180) / 15) % 12), Math.round(x - 6.5), Math.round(y - 6.5));
   }
+  ctx.globalAlpha = 1;
 }
 function frame(t) {
   ctx.imageSmoothingEnabled = false;
@@ -171,7 +174,7 @@ function frame(t) {
   for (const e of emps.values()) {
     if (e.x === -100) continue;
     const d = deskPos(e.desk);
-    if (e.hot && e.phase === 'seated' && !e.walking && !e.leaving) items.push({ key: d.y + 35.5, fn: () => drawPapers(d, e, t) }); // 책상과 모니터보다 뒤, 직원보다 앞
+    if (e.hot && e.phase === 'seated' && !e.walking && !e.leaving) items.push({ key: d.y + 41, fn: () => drawPapers(d, e, t) }); // 책상, 모니터, 리클라이너보다 앞
     items.push({ key: e.walking || e.leaving ? e.y + 2 : e.phase === 'rest' ? d.y + 36 : d.y + 34.5, fn: () => renderEmployee(e, t) });
   }
   items.sort((a, b) => a.key - b.key).forEach((i) => i.fn());
