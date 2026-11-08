@@ -9,7 +9,14 @@ let isKorean = (Locale.preferredLanguages.first ?? "en").hasPrefix("ko")
 func L(_ ko: String, _ en: String) -> String { isKorean ? ko : en }
 
 let log = (NSHomeDirectory() as NSString).appendingPathComponent("Library/Logs/Claude Office.log")
+let maxLogBytes = 1_000_000
 func writeLog(_ s: String) {
+    // Keep one previous log: when the file grows past the limit, it becomes "<name>.1" and a new file starts.
+    if let size = (try? FileManager.default.attributesOfItem(atPath: log))?[.size] as? Int, size > maxLogBytes {
+        let old = log + ".1"
+        try? FileManager.default.removeItem(atPath: old)
+        try? FileManager.default.moveItem(atPath: log, toPath: old)
+    }
     let line = "\(Date()) \(s)\n"
     if let h = FileHandle(forWritingAtPath: log) { h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); try? h.close() }
     else { try? line.write(toFile: log, atomically: true, encoding: .utf8) }
@@ -22,6 +29,15 @@ struct Session: Decodable {
     let parentId: String?
     let kind: String?
     let workedMs: Double?
+    let statusUpdatedAt: Double?
+}
+
+// Collects process output from a readability handler, which runs on a background queue.
+final class OutputBox {
+    private var data = Data()
+    private let lock = NSLock()
+    func append(_ d: Data) { lock.lock(); data.append(d); lock.unlock() }
+    func text() -> String { lock.lock(); defer { lock.unlock() }; return String(data: data, encoding: .utf8) ?? "" }
 }
 struct Window5: Decodable { let pct: Double; let resetsAt: Double }
 struct Usage: Decodable { let ok: Bool; let fiveHour: Window5?; let weekly: Window5? }
@@ -83,7 +99,7 @@ final class UsageFetcher: NSObject, WKNavigationDelegate {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, NSWindowDelegate, WKScriptMessageHandler {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, NSWindowDelegate, WKScriptMessageHandler, UNUserNotificationCenterDelegate {
     var statusItem: NSStatusItem!
     var window: NSWindow!
     var web: WKWebView!
@@ -99,7 +115,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     var loginWin: NSWindow?
     var loginTimer: Timer?
     var usageTimer: Timer?
+    var usageFailures = 0
+    var usageNextTry = Date.distantPast
+    var lastUsageError = ""
     let d = UserDefaults.standard
+
+    // Server supervision: the server is restarted with a growing delay when it exits unexpectedly.
+    var nodeInfo: (String, String)?     // node path and PATH, found once and reused for restarts
+    var serverDown = false
+    var quitting = false
+    var serverGen = 0                   // identifies the current server process, so output and exits of old ones are ignored
+    var serverStartedAt = Date()
+    var restartDelay = 1.0
+
+    // Notifications
+    // A finished turn notifies only after this many seconds of work, so quick replies stay silent. Subagents need to work longer.
+    let minWorkSecs = 30
+    let minSubagentSecs = 120
+    var notifyEnabled: Bool { d.object(forKey: "notify") as? Bool ?? true }
+    // Quiet hours as "startHour-endHour" (24-hour clock, may cross midnight), or "off".
+    var quietHours: String { d.string(forKey: "quiet") ?? "off" }
 
     var theme: String { d.string(forKey: "theme") ?? "office" }
     var zoom: String { d.string(forKey: "zoom") ?? "normal" }
@@ -110,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     func applicationDidFinishLaunching(_ n: Notification) {
         NSApp.setActivationPolicy(.regular)
+        UNUserNotificationCenter.current().delegate = self
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         // Menu bar icon: a pixel mascot in the app icon's colors. A 32px image shown at 16pt stays crisp on Retina screens.
@@ -124,7 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ app: NSApplication, hasVisibleWindows: Bool) -> Bool { showWindow(); return true }
-    func applicationWillTerminate(_ n: Notification) { server?.terminate() }
+    func applicationWillTerminate(_ n: Notification) { quitting = true; server?.terminate() }
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let m = NSMenu(); m.addItem(withTitle: L("사무실 열기", "Open Office"), action: #selector(showWindow), keyEquivalent: ""); return m
     }
@@ -143,6 +179,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let c = NSMenuItem(title: L("날씨 위치", "Weather Location"), action: nil, keyEquivalent: ""); let cs = NSMenu()
         for (k, v) in [("seoul", L("서울", "Seoul")), ("tokyo", L("도쿄", "Tokyo")), ("newyork", L("뉴욕", "New York")), ("london", L("런던", "London")), ("sydney", L("시드니", "Sydney"))] { let i = NSMenuItem(title: v, action: #selector(pickCity(_:)), keyEquivalent: ""); i.representedObject = k; i.state = city == k ? .on : .off; cs.addItem(i) }
         c.submenu = cs; m.addItem(c)
+        let nt = NSMenuItem(title: L("알림", "Notifications"), action: nil, keyEquivalent: ""); let ns = NSMenu()
+        let on = NSMenuItem(title: L("알림 받기", "Show Notifications"), action: #selector(toggleNotify(_:)), keyEquivalent: ""); on.state = notifyEnabled ? .on : .off; ns.addItem(on)
+        ns.addItem(.separator())
+        let qh = NSMenuItem(title: L("방해 금지 시간", "Quiet Hours"), action: nil, keyEquivalent: ""); qh.isEnabled = false; ns.addItem(qh)
+        for (k, v) in [("off", L("사용 안 함", "Off")), ("22-8", "22:00 – 08:00"), ("0-8", "00:00 – 08:00")] { let i = NSMenuItem(title: v, action: #selector(pickQuiet(_:)), keyEquivalent: ""); i.representedObject = k; i.state = quietHours == k ? .on : .off; ns.addItem(i) }
+        nt.submenu = ns; m.addItem(nt)
         let login = NSMenuItem(title: L("로그인할 때 열기", "Open at Login"), action: #selector(toggleLogin(_:)), keyEquivalent: "")
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off; m.addItem(login)
         m.addItem(.separator())
@@ -153,6 +195,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     @objc func pickTheme(_ s: NSMenuItem) { d.set(s.representedObject as? String, forKey: "theme"); buildMenu(); pushSettings() }
     @objc func pickCity(_ s: NSMenuItem) { d.set(s.representedObject as? String, forKey: "city"); buildMenu(); pushSettings() }
     @objc func pickZoom(_ s: NSMenuItem) { d.set(s.representedObject as? String, forKey: "zoom"); buildMenu(); pushSettings() }
+    @objc func toggleNotify(_ s: NSMenuItem) { d.set(!notifyEnabled, forKey: "notify"); buildMenu() }
+    @objc func pickQuiet(_ s: NSMenuItem) { d.set(s.representedObject as? String, forKey: "quiet"); buildMenu() }
     @objc func toggleLogin(_ s: NSMenuItem) {
         do { if SMAppService.mainApp.status == .enabled { try SMAppService.mainApp.unregister() } else { try SMAppService.mainApp.register() } } catch { writeLog("login item: \(error)") }
         buildMenu()
@@ -192,7 +236,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         guard let body = m.body as? String else { return }
         if body == "login" { openLogin() } else if body.hasPrefix("log:") { writeLog(String(body.dropFirst(4))) }
     }
+    // After a failure the periodic fetch waits longer each time (45s, 90s, ... up to 10 minutes). The login window's own retries are not delayed.
+    func noteUsageFailure() {
+        usageFailures += 1
+        let wait = min(45.0 * pow(2.0, Double(usageFailures - 1)), 600)
+        usageNextTry = Date().addingTimeInterval(wait)
+    }
     func refreshUsage(fromLogin: Bool = false) {
+        if !fromLogin, Date() < usageNextTry { return }
         fetcher.fetch { [weak self] r in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -200,7 +251,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                 case .success(let json):
                     // Parse the raw response once and serialize it again, so only clean JSON reaches the UI.
                     guard let data = json.data(using: .utf8), let obj = try? JSONSerialization.jsonObject(with: data),
-                          let clean = try? JSONSerialization.data(withJSONObject: obj), let text = String(data: clean, encoding: .utf8) else { self.usageState = "error"; self.pushUsage(); return }
+                          let clean = try? JSONSerialization.data(withJSONObject: obj), let text = String(data: clean, encoding: .utf8) else { self.noteUsageFailure(); self.usageState = "error"; self.pushUsage(); return }
+                    self.usageFailures = 0; self.usageNextTry = .distantPast; self.lastUsageError = ""
                     if let d = obj as? [String: Any], let f = d["five_hour"] as? [String: Any], let u = f["utilization"] as? Double { self.appFive = u }
                     self.lastUsageJSON = text
                     if self.usageState != "ok" { self.usageState = "ok"; self.buildMenu() }
@@ -208,7 +260,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                     if fromLogin { self.loginWin?.close() }
                 case .failure(let e):
                     let m = e.localizedDescription
-                    writeLog("usage fetch failed: \(m)")
+                    self.noteUsageFailure()
+                    // The login window retries every 3 seconds with the same error, so there a message is logged only when it changes.
+                    // Periodic attempts are already spaced out by the backoff, so each one is logged with the wait before the next.
+                    if !fromLogin || m != self.lastUsageError { writeLog("usage fetch failed (#\(self.usageFailures), next try in \(Int(self.usageNextTry.timeIntervalSinceNow.rounded()))s): \(m)") }
+                    self.lastUsageError = m
                     let needLogin = m.contains("401") || m.contains("403")
                     let next = needLogin ? "login" : "error"
                     if self.usageState != next { self.usageState = next; self.buildMenu() }
@@ -250,21 +306,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     // MARK: Node server
-    func findNode() -> (String, String)? {
+    // Asks a login shell for node and PATH (version managers set them in the shell profile). It runs off the main thread with no input
+    // and a time limit, because an interactive shell can wait on a profile that prompts or attaches to tmux.
+    func nodeFromLoginShell() -> (String, String)? {
         let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/zsh")
         p.arguments = ["-lic", "command -v node; echo $PATH"]
-        let out = Pipe(); p.standardOutput = out; p.standardError = Pipe()
+        let out = Pipe(), box = OutputBox(), done = DispatchSemaphore(value: 0)
+        p.standardInput = FileHandle.nullDevice; p.standardOutput = out; p.standardError = FileHandle.nullDevice
+        out.fileHandleForReading.readabilityHandler = { h in let d = h.availableData; if d.isEmpty { h.readabilityHandler = nil } else { box.append(d) } }
+        p.terminationHandler = { _ in done.signal() }
         do { try p.run() } catch { return nil }
-        p.waitUntilExit()
-        let lines = (String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "").split(separator: "\n").map(String.init)
-        guard lines.count >= 2, lines[lines.count - 2].hasPrefix("/") else { return nil }
+        if done.wait(timeout: .now() + 8) == .timedOut { p.terminate(); out.fileHandleForReading.readabilityHandler = nil; writeLog("login shell timed out while looking for node"); return nil }
+        Thread.sleep(forTimeInterval: 0.15) // let output that is still in the pipe arrive
+        out.fileHandleForReading.readabilityHandler = nil
+        let lines = box.text().split(separator: "\n").map(String.init)
+        guard lines.count >= 2, lines[lines.count - 2].hasPrefix("/"), FileManager.default.isExecutableFile(atPath: lines[lines.count - 2]) else { return nil }
         return (lines[lines.count - 2], lines[lines.count - 1])
     }
-    func startServer() {
-        guard let (node, path) = findNode() else {
-            let a = NSAlert(); a.messageText = L("Node.js를 찾지 못했습니다", "Node.js not found"); a.informativeText = L("Node.js 18 이상을 설치한 뒤 앱을 다시 실행하세요.", "Install Node.js 18 or later and relaunch the app."); a.runModal(); statusItem.button?.title = "⚠️"; return
+    // Falls back to common install locations when the login shell does not answer.
+    func findNode() -> (String, String)? {
+        if let found = nodeFromLoginShell() { return found }
+        let basePath = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+        for c in ["/opt/homebrew/bin/node", "/usr/local/bin/node", NSHomeDirectory() + "/.volta/bin/node"] where FileManager.default.isExecutableFile(atPath: c) {
+            writeLog("using node at \(c)")
+            return (c, (c as NSString).deletingLastPathComponent + ":" + basePath)
         }
-        guard let res = Bundle.main.resourcePath else { return }
+        return nil
+    }
+    func startServer() {
+        if let n = nodeInfo { launchServer(n.0, n.1); return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let found = self?.findNode()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard let n = found else {
+                    self.serverDown = true; self.refreshTitle()
+                    let a = NSAlert(); a.messageText = L("Node.js를 찾지 못했습니다", "Node.js not found"); a.informativeText = L("Node.js 18 이상을 설치한 뒤 앱을 다시 실행하세요.", "Install Node.js 18 or later and relaunch the app."); a.runModal(); return
+                }
+                self.nodeInfo = n
+                self.launchServer(n.0, n.1)
+            }
+        }
+    }
+    func launchServer(_ node: String, _ path: String) {
+        guard !quitting, let res = Bundle.main.resourcePath else { return }
+        serverGen += 1
+        let gen = serverGen
         let script = (res as NSString).appendingPathComponent("server/server.mjs")
         let p = Process(); p.executableURL = URL(fileURLWithPath: node); p.arguments = [script]
         var env = ProcessInfo.processInfo.environment; env["PORT"] = "0"; env["PATH"] = path; env["CLAUDE_OFFICE_THEME"] = theme; env["CLAUDE_OFFICE_EXIT_WITH_PARENT"] = "1"; p.environment = env
@@ -275,19 +362,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             guard let s = String(data: h.availableData, encoding: .utf8), !s.isEmpty else { return }
             writeLog("server: \(s)")
             if let r = s.range(of: #"http://localhost:\d+"#, options: .regularExpression), let url = URL(string: String(s[r])) {
-                DispatchQueue.main.async { self?.serverReady(url) }
+                DispatchQueue.main.async { if self?.serverGen == gen { self?.serverReady(url) } }
             }
         }
-        p.terminationHandler = { [weak self] _ in DispatchQueue.main.async { self?.statusItem.button?.title = "⚠️"; writeLog("server exited") } }
-        do { try p.run(); server = p } catch { writeLog("launch failed: \(error)"); statusItem.button?.title = "⚠️" }
+        p.terminationHandler = { [weak self] proc in DispatchQueue.main.async { self?.serverExited(gen, status: proc.terminationStatus) } }
+        do { try p.run(); server = p; serverStartedAt = Date() } catch { writeLog("launch failed: \(error)"); serverExited(gen, status: -1) }
+    }
+    // Restarts the server after an unexpected exit. The delay doubles up to 30 seconds, and starts over once a server ran for a minute.
+    func serverExited(_ gen: Int, status: Int32) {
+        guard !quitting, gen == serverGen else { return }
+        serverDown = true; baseURL = nil
+        if Date().timeIntervalSince(serverStartedAt) > 60 { restartDelay = 1 }
+        let delay = restartDelay
+        restartDelay = min(restartDelay * 2, 30)
+        writeLog("server exited (status \(status)); restarting in \(Int(delay))s")
+        refreshTitle()
+        web.loadHTMLString(loadingHTML(), baseURL: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, !self.quitting, self.serverDown else { return }
+            self.startServer()
+        }
     }
     func serverReady(_ url: URL) {
         guard baseURL == nil else { return }
-        baseURL = url
+        baseURL = url; serverDown = false
         web.load(URLRequest(url: url))
-        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.tick() }
-        refreshUsage()
-        usageTimer = Timer.scheduledTimer(withTimeInterval: 45, repeats: true) { [weak self] _ in self?.refreshUsage() }
+        if timer == nil {
+            timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.tick() }
+            refreshUsage()
+            usageTimer = Timer.scheduledTimer(withTimeInterval: 45, repeats: true) { [weak self] _ in self?.refreshUsage() }
+        }
+        refreshTitle()
     }
 
     // MARK: Menu bar and notifications
@@ -305,6 +410,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     var usage: Usage?
     var count = 0
     func refreshTitle() {
+        if serverDown { statusItem.button?.title = "⚠️"; return }
         var t = statusItem.button?.image == nil ? "🏢 \(count)" : " \(count)"
         if let f = appFive { t += " · \(max(0, 100 - Int(f.rounded())))% \(L("남음", "left"))" }
         else if let u = usage, u.ok, let f = u.fiveHour { t += " · \(max(0, 100 - Int(f.pct.rounded())))% \(L("남음", "left"))" }
@@ -314,22 +420,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         count = list.filter { $0.parentId == nil }.count; refreshTitle()
         for s in list {
             let prev = lastStatus[s.sessionId]
-            if s.status == "busy", busySince[s.sessionId] == nil { busySince[s.sessionId] = Date() }
+            if s.status == "busy", busySince[s.sessionId] == nil {
+                // Start from the time the session reported busy, so a session already working when the app launched is not under-counted.
+                var since = Date()
+                if let ms = s.statusUpdatedAt, ms > 0 { let t = Date(timeIntervalSince1970: ms / 1000); if t < since { since = t } }
+                busySince[s.sessionId] = since
+            }
             if let prev, prev != s.status {
-                if s.status == "waiting" { notify(L("승인 요청", "Approval needed"), L("\(s.name): 확인이 필요합니다.", "\(s.name): needs your attention.")) }
+                if s.status == "waiting" { notify(L("승인 요청", "Approval needed"), L("\(s.name): 확인이 필요합니다.", "\(s.name): needs your attention."), sessionId: s.sessionId) }
                 else if s.status == "idle", prev == "busy" {
                     let secs = Int(Date().timeIntervalSince(busySince[s.sessionId] ?? Date()))
-                    if s.parentId == nil || secs > 120 { notify(L("작업 완료", "Work finished"), L("\(s.name): \(secs / 60)분 \(secs % 60)초 동안 일했습니다.", "\(s.name): worked for \(secs / 60)m \(secs % 60)s.")) }
+                    if secs >= (s.parentId == nil ? minWorkSecs : minSubagentSecs) { notify(L("작업 완료", "Work finished"), L("\(s.name): \(secs / 60)분 \(secs % 60)초 동안 일했습니다.", "\(s.name): worked for \(secs / 60)m \(secs % 60)s."), sessionId: s.sessionId) }
                 }
             }
             if s.status != "busy" { busySince[s.sessionId] = nil }
             lastStatus[s.sessionId] = s.status
         }
-        let ids = Set(list.map { $0.sessionId }); lastStatus = lastStatus.filter { ids.contains($0.key) }
+        let ids = Set(list.map { $0.sessionId }); lastStatus = lastStatus.filter { ids.contains($0.key) }; busySince = busySince.filter { ids.contains($0.key) }
     }
-    func notify(_ title: String, _ body: String) {
+    // True when the current hour is inside the chosen quiet hours.
+    func inQuietHours(_ now: Date = Date()) -> Bool {
+        let parts = quietHours.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 2 else { return false }
+        let h = Calendar.current.component(.hour, from: now), a = parts[0], b = parts[1]
+        return a <= b ? (h >= a && h < b) : (h >= a || h < b)
+    }
+    func notify(_ title: String, _ body: String, sessionId: String) {
+        guard notifyEnabled else { writeLog("notification skipped (off): \(title)"); return }
+        guard !inQuietHours() else { writeLog("notification skipped (quiet hours \(quietHours)): \(title)"); return }
+        writeLog("notification sent: \(title) / \(body)")
         let c = UNMutableNotificationContent(); c.title = title; c.body = body; c.sound = .default
+        c.userInfo = ["sessionId": sessionId]
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil))
+    }
+    // Show banners even while the app is in front, and jump to the session's terminal when a notification is clicked.
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void) {
+        done([.banner, .sound])
+    }
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler done: @escaping () -> Void) {
+        if let id = response.notification.request.content.userInfo["sessionId"] as? String { focusSession(id) }
+        done()
+    }
+    // Same request the UI sends. The server accepts POST only with an Origin equal to its own address.
+    func focusSession(_ id: String) {
+        guard let base = baseURL else { return }
+        var req = URLRequest(url: base.appendingPathComponent("api/focus")); req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "content-type")
+        req.setValue(base.absoluteString, forHTTPHeaderField: "Origin")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["sessionId": id])
+        URLSession.shared.dataTask(with: req) { data, resp, err in
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
+            writeLog("focus request for \(id): HTTP \(code) \(data.flatMap { String(data: $0, encoding: .utf8) } ?? "") \(err.map { "\($0)" } ?? "")")
+        }.resume()
     }
 }
 
