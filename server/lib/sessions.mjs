@@ -50,7 +50,7 @@ async function readSessionFiles() {
 // Subagents write to their own transcripts, so the parent's transcript never contains their usage.
 // Sum today's tokens over every subagent transcript, including finished ones, so the parent's totals and token rate include them.
 export async function subagentStats(sub, names) {
-  const views = new Map(); // agent id -> {tokensToday, tokensPerMin}
+  const views = new Map(); // agent id -> {tokensToday, weightedPerMin}
   const midnight = startOfToday();
   for (const n of names) {
     if (!n.endsWith('.jsonl')) continue;
@@ -60,15 +60,15 @@ export async function subagentStats(sub, names) {
     const v = statsView(await updateStats(file).catch(() => null));
     views.set(n.replace(/\.jsonl$/, ''), v);
   }
-  let tokensToday = 0, tokensPerMin = 0;
-  for (const v of views.values()) { tokensToday += v.tokensToday; tokensPerMin += v.tokensPerMin; }
-  return { views, tokensToday, tokensPerMin };
+  let tokensToday = 0, weightedPerMin = 0;
+  for (const v of views.values()) { tokensToday += v.tokensToday; weightedPerMin += v.weightedPerMin; }
+  return { views, tokensToday, weightedPerMin };
 }
 
 export async function buildSubagents(parent, transcript) {
   const dir = transcript.replace(/\.jsonl$/, '');
   const sub = path.join(dir, 'subagents');
-  let names; try { names = await fsp.readdir(sub); } catch { return { items: [], tokensToday: 0, tokensPerMin: 0 }; }
+  let names; try { names = await fsp.readdir(sub); } catch { return { items: [], tokensToday: 0, weightedPerMin: 0 }; }
   const stats = await subagentStats(sub, names);
   const out = [];
   for (const n of names) {
@@ -86,15 +86,26 @@ export async function buildSubagents(parent, transcript) {
         name: meta.description || meta.agentType || id, cwd: parent.cwd, startedAt: meta.startedAt || stat.birthtimeMs,
         status: Date.now() - stat.mtimeMs < 20_000 ? 'busy' : 'idle', activity: sum.activity || '', ctxTokens: sum.ctxTokens || 0, ctxLimit: contextLimit(sum.model, sum.ctxTokens), model: sum.model || '',
         failStreak: sum.failStreak || 0, lastPrompt: '', title: '', workedMs: 0,
-        tokensToday: stats.views.get(id)?.tokensToday || 0, tokensPerMin: stats.views.get(id)?.tokensPerMin || 0,
+        tokensToday: stats.views.get(id)?.tokensToday || 0, weightedPerMin: stats.views.get(id)?.weightedPerMin || 0,
       });
     } catch { /* skipped */ }
   }
-  return { items: out, tokensToday: stats.tokensToday, tokensPerMin: stats.tokensPerMin };
+  return { items: out, tokensToday: stats.tokensToday, weightedPerMin: stats.weightedPerMin };
+}
+
+// The process list only changes when a teammate starts or stops, so a few seconds old is fine. Reading it spawns `ps` over every process,
+// and the UI and the app ask for the sessions every couple of seconds.
+const PS_TTL_MS = 5000;
+let psCache = { at: 0, text: '' };
+export async function listProcessArgs(run = sh, now = Date.now) {
+  if (now() - psCache.at < PS_TTL_MS) return psCache.text;
+  const text = await run('ps', ['-axo', 'pid=,args=']);
+  psCache = { at: now(), text };
+  return text;
 }
 
 async function buildTeammates(parents) {
-  const ps = await sh('ps', ['-axo', 'pid=,args=']);
+  const ps = await listProcessArgs();
   const out = [];
   for (const line of ps.split('\n')) {
     const m = line.match(/^\s*(\d+)\s+(.*)$/);
@@ -112,15 +123,24 @@ async function buildTeammates(parents) {
     out.push({
       kind: 'teammate', sessionId: `team:${agentId}`, parentId, pid: Number(m[1]), name: agentId.split('@')[0], cwd: parent.cwd,
       startedAt: parent.startedAt, status: active ? 'busy' : 'idle', activity: '', ctxTokens: 0, model: '', failStreak: 0,
-      lastPrompt: '', title: '', tokensToday: 0, workedMs: 0, tokensPerMin: 0,
+      lastPrompt: '', title: '', tokensToday: 0, workedMs: 0, weightedPerMin: 0,
     });
   }
   return out;
 }
 
 let sessionsCache = { at: 0, value: null };
+let sessionsInFlight = null; // the collection that is running now, shared by every caller that arrives meanwhile
 export async function collectSessions(force = false) {
   if (!force && Date.now() - sessionsCache.at < 1500 && sessionsCache.value) return sessionsCache.value;
+  // The UI and the app poll at the same time, so a second caller waits for the running collection instead of repeating it.
+  // A forced call also joins it, because the result is at most a moment old.
+  if (sessionsInFlight) return sessionsInFlight;
+  sessionsInFlight = gatherSessions().finally(() => { sessionsInFlight = null; });
+  return sessionsInFlight;
+}
+
+async function gatherSessions() {
   const files = await readSessionFiles();
   if (files === null) return (sessionsCache = { at: Date.now(), value: { missing: true, list: [] } }).value;
   const list = [];
@@ -141,12 +161,12 @@ export async function collectSessions(force = false) {
       status: waiting ? 'waiting' : s.status === 'busy' ? 'busy' : 'idle',
       waitingFor: s.waitingFor || '', statusUpdatedAt: s.statusUpdatedAt || 0,
       activity: sum.activity || '', ctxTokens: sum.ctxTokens || 0, ctxLimit: contextLimit(sum.model, sum.ctxTokens), model: sum.model || '', failStreak: sum.failStreak || 0,
-      ...(stats || { tokensToday: 0, workedMs: 0, tokensPerMin: 0 }),
+      ...(stats || { tokensToday: 0, workedMs: 0, weightedPerMin: 0 }),
     };
     list.push(item); parents.set(s.sessionId, item);
     if (tr) {
       const sub = await buildSubagents(s, tr);
-      item.tokensToday += sub.tokensToday; item.tokensPerMin += sub.tokensPerMin;
+      item.tokensToday += sub.tokensToday; item.weightedPerMin += sub.weightedPerMin;
       list.push(...sub.items);
     }
   }));

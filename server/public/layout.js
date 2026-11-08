@@ -1,7 +1,7 @@
 // Layout constants, employee looks, and desk placement. No modules are used, so top-level variables are shared with the other scripts.
 const $ = (s) => document.querySelector(s);
 const cv = $('#office');
-const ctx = cv.getContext('2d');
+let ctx = cv.getContext('2d'); // replaced by a recorder for a moment while a frame is probed (frameprobe.js, scene.js)
 const stage = $('#stage');
 const tcv = $('#text'); // Text is drawn on a separate high-resolution layer.
 const tx = tcv.getContext('2d');
@@ -12,7 +12,7 @@ const ZOOMS = { small: 2, normal: 3, large: 4 };
 
 let theme = params.get('theme') || 'office';
 let baseZoom = Number(params.get('zoom')) || 3;
-let fireThresholdK = 120; // thousands of tokens per minute
+let fireThresholdK = 120; // thousands of weighted tokens per minute (see weightedTokens in server/lib/stats.mjs)
 let hourOverride = params.has('hour') ? Number(params.get('hour')) : null;
 let weatherOverride = params.has('weather') ? Number(params.get('weather')) : null;
 

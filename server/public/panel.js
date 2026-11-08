@@ -104,8 +104,8 @@ $('#panelBtn').addEventListener('click', () => { $('#panel').classList.toggle('f
 $('#helpBtn').addEventListener('click', showHelp);
 
 // Time bar
-$('#hour').addEventListener('input', (e) => { hourOverride = Number(e.target.value); $('#hourText').textContent = `${Math.floor(hourOverride)}:${String(Math.round((hourOverride % 1) * 60)).padStart(2, '0')}`; });
-$('#hourReset').addEventListener('click', () => { hourOverride = null; $('#hourText').textContent = tr('hourReal'); });
+$('#hour').addEventListener('input', (e) => { hourOverride = Number(e.target.value); $('#hourText').textContent = `${Math.floor(hourOverride)}:${String(Math.round((hourOverride % 1) * 60)).padStart(2, '0')}`; wake(); });
+$('#hourReset').addEventListener('click', () => { hourOverride = null; $('#hourText').textContent = tr('hourReal'); wake(); });
 
 let toastTimer;
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 3500); }
@@ -209,6 +209,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
   pollSessions(); pollUsage(); renderUsage(); pollSun();
   last = 0; // the time spent hidden must not become one huge animation step
-  queueLoop();
+  lastSig = ''; // draw again even if nothing changed, in case the canvas was dropped while hidden
+  wake();
 });
 queueLoop();
