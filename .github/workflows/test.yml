@@ -17,3 +17,12 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - run: npm test
+
+  swift:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Type-check the app shell
+        run: swiftc -typecheck app/main.swift -target arm64-apple-macos13.0
+      - name: Validate Info.plist
+        run: plutil -lint app/Info.plist
