@@ -34,17 +34,35 @@ function renderCards(list) {
   for (const { s, child } of rows) {
     if (fStatus === 'all' && !child && s.status !== lastGroup) { lastGroup = s.status; html += `<div class="group">${labels[s.status]} ${counts[s.status]}</div>`; }
     const hasKids = !child && list.some((x) => x.parentId === s.sessionId);
-    const lim = s.ctxTokens > 200000 || !/claude-(3-|haiku-4-5|sonnet-4(?!-[6-9])|opus-4(?!-[6-9]))/.test(s.model || '') ? 1e6 : 2e5;
+    const lim = s.ctxLimit || 1e6; // the server decides the window size from the model
     const act = s.status === 'waiting' ? waitingText(s.waitingFor) : s.status === 'busy' ? (actText(s.activity) || tr('working')) : (s.lastPrompt || tr('standby'));
+    const kind = child ? ' · ' + (s.kind === 'teammate' ? tr('teammate') : tr('subagent')) : '';
+    // The card body is a button for the keyboard and screen readers. The fold button sits beside it because buttons cannot be nested.
     html += `<div class="card ${s.status} ${child ? 'child' : ''}" data-id="${esc(s.sessionId)}">
-      ${hasKids ? `<button class="fold" data-fold="${esc(s.sessionId)}">${collapsed.has(s.sessionId) ? tr('unfold') : tr('fold')}</button>` : ''}
-      <div class="name">${esc(s.name)}</div><div class="proj">${esc(projOf(s))}${child ? ' · ' + (s.kind === 'teammate' ? tr('teammate') : tr('subagent')) : ''}</div>
-      <div class="act">${esc(act)}</div>
-      ${child ? '' : `<div class="meta"><span>${fmtDur(s.workedMs)}</span><span>${tr('tokens', fmtTok(s.tokensToday))}</span><span>${fmtTok(s.ctxTokens)} (${Math.round((s.ctxTokens / lim) * 100)}%)</span></div>`}
+      <div class="main" role="button" tabindex="0" aria-label="${esc(`${s.name}, ${projOf(s)}${kind}, ${labels[s.status]}, ${act}`)}">
+        <div class="name">${esc(s.name)}</div><div class="proj">${esc(projOf(s))}${esc(kind)}</div>
+        <div class="act">${esc(act)}</div>
+        ${child ? '' : `<div class="meta"><span>${fmtDur(s.workedMs)}</span><span>${tr('tokens', fmtTok(s.tokensToday))}</span><span>${fmtTok(s.ctxTokens)} (${Math.round((s.ctxTokens / lim) * 100)}%)</span></div>`}
+      </div>
+      ${hasKids ? `<button class="fold" data-fold="${esc(s.sessionId)}" aria-expanded="${collapsed.has(s.sessionId) ? 'false' : 'true'}">${collapsed.has(s.sessionId) ? tr('unfold') : tr('fold')}</button>` : ''}
     </div>`;
   }
   html = html || `<div class="group">${list.length ? tr('noMatch') : tr('noSessions')}</div>`;
-  if (box.dataset.sig !== html) { box.dataset.sig = html; box.innerHTML = html; box.scrollTop = prevScroll; onHover(hoverId); }
+  if (box.dataset.sig !== html) {
+    // Replacing the cards would drop the keyboard focus, so remember what had it and focus the same control again.
+    const had = document.activeElement && box.contains(document.activeElement) ? document.activeElement : null;
+    const keep = had ? { id: had.closest('.card')?.dataset.id, fold: had.matches('[data-fold]') } : null;
+    box.dataset.sig = html; box.innerHTML = html; box.scrollTop = prevScroll; onHover(hoverId);
+    if (keep && keep.id) {
+      const card = box.querySelector(`.card[data-id="${CSS.escape(keep.id)}"]`);
+      const target = card && (keep.fold ? card.querySelector('[data-fold]') : card.querySelector('.main'));
+      if (target) target.focus({ preventScroll: true });
+    }
+  }
+  // Describe the picture for screen readers: how many sessions there are in each state.
+  const top = list.filter((s) => !s.parentId), nOf = (st) => top.filter((s) => s.status === st).length;
+  const officeLabel = tr('officeLabel', top.length, nOf('waiting'), nOf('busy'), nOf('idle'));
+  if ($('#office').getAttribute('aria-label') !== officeLabel) $('#office').setAttribute('aria-label', officeLabel);
   // Project filter list
   const sel = $('#fProject'), projects = [...new Set(list.filter((s) => !s.parentId).map(projOf))].sort();
   const want = ['all', ...projects].join('|');
@@ -59,8 +77,17 @@ $('#cards').addEventListener('click', (ev) => {
   const fold = ev.target.closest('[data-fold]');
   if (fold) { const id = fold.dataset.fold; collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id); renderCards(sessionList); ev.stopPropagation(); return; }
   const card = ev.target.closest('.card'); if (!card) return;
-  fetch('/api/focus', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: card.dataset.id }) }).catch(() => {});
+  jumpToSession(card.dataset.id);
 });
+function jumpToSession(id) {
+  fetch('/api/focus', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: id }) }).catch(() => {});
+}
+// Enter or Space on a focused card does what a click does. The cards also follow the keyboard focus, like the mouse hover.
+$('#cards').addEventListener('keydown', (ev) => {
+  if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.classList.contains('main')) { ev.preventDefault(); jumpToSession(ev.target.closest('.card').dataset.id); }
+});
+$('#cards').addEventListener('focusin', (ev) => { const c = ev.target.closest('.card'); if (c) { hoverId = c.dataset.id; onHover(hoverId); } });
+$('#cards').addEventListener('focusout', () => { hoverId = null; onHover(null); });
 $('#cards').addEventListener('mouseover', (ev) => { const c = ev.target.closest('.card'); hoverId = c ? c.dataset.id : null; });
 $('#cards').addEventListener('mouseleave', () => { hoverId = null; });
 onHover = (id) => {
@@ -121,7 +148,7 @@ function emptyText() {
 function renderMeter(el, w, name, staleMs = 0) {
   const txt = el.querySelector('.txt'), fill = el.querySelector('.bar i');
   el.classList.remove('mid', 'low', 'none', 'click', 'stale');
-  if (!w) { const [t, hint] = emptyText(); el.classList.add('none'); if (appState === 'login') el.classList.add('click'); fill.style.width = '0%'; txt.textContent = t; el.title = hint; return; }
+  if (!w) { const [t, hint] = emptyText(); el.classList.add('none'); if (appState === 'login') el.classList.add('click'); fill.style.width = '0%'; txt.textContent = t; el.title = hint; el.setAttribute('aria-label', `${name}: ${t}. ${hint}`); return; }
   const expired = w.resetsAt && w.resetsAt * 1000 <= Date.now();
   const used = expired ? 0 : Math.min(100, Math.max(0, w.pct)), left = Math.round(100 - used);
   fill.style.width = left + '%';
@@ -131,6 +158,7 @@ function renderMeter(el, w, name, staleMs = 0) {
   el.classList.toggle('stale', stale);
   txt.innerHTML = `<b>${left}%</b> ${tr('left')}${reset ? ` <span class="reset">· ${reset}</span>` : ''}`;
   el.title = `${tr('meterTitle', name, Math.round(used), left)}${reset ? ' (' + reset + ')' : ''}${stale ? '. ' + tr('staleNote') : ''}`;
+  el.setAttribute('aria-label', el.title);
 }
 const STALE_GRACE_MS = 150000, STALE_LIMIT_MS = 6 * 3600 * 1000;
 function renderUsage() {

@@ -23,6 +23,10 @@ function showHelp() {
   const desc = document.createElement('div'); desc.className = 'desc'; desc.appendChild(ul);
   box.appendChild(desc);
   box.hidden = false;
+  box.focus();
 }
-$('#help').addEventListener('click', () => { $('#help').hidden = true; });
+// Closing returns the focus to the button that opened the guide.
+function hideHelp() { $('#help').hidden = true; $('#helpBtn').focus(); }
+$('#help').addEventListener('click', hideHelp);
+window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && !$('#help').hidden) hideHelp(); });
 window.addEventListener('resize', () => { if (!$('#help').hidden) showHelp(); });

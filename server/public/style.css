@@ -52,4 +52,7 @@ button:hover { background:#5a483c; }
 #help .tag { position:absolute; width:22px; height:22px; border-radius:11px; background:var(--warn); color:#000; font-weight:700; text-align:center; line-height:22px; }
 #help .desc { position:absolute; left:0; right:0; bottom:0; background:var(--panel); padding:12px 20px; max-height:45%; overflow:auto; }
 #help .desc li { margin:3px 0; }
+button:focus-visible, select:focus-visible, input:focus-visible { outline:2px solid var(--warn); outline-offset:2px; }
+.card .main { border-radius:6px; }
+.card .main:focus-visible { outline:2px solid var(--warn); outline-offset:3px; }
 [hidden] { display: none !important; }
