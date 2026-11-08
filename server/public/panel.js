@@ -43,7 +43,7 @@ function renderCards(list) {
       ${child ? '' : `<div class="meta"><span>${fmtDur(s.workedMs)}</span><span>${fmtTok(s.tokensToday)} 토큰</span><span>${fmtTok(s.ctxTokens)} (${Math.round((s.ctxTokens / lim) * 100)}%)</span></div>`}
     </div>`;
   }
-  html = html || '<div class="group">표시할 세션이 없습니다</div>';
+  html = html || `<div class="group">${list.length ? '표시할 세션이 없습니다' : '실행 중인 세션이 없습니다. 터미널이나 Claude 데스크톱 앱에서 Claude Code를 시작하면 직원이 출근합니다.'}</div>`;
   if (box.dataset.sig !== html) { box.dataset.sig = html; box.innerHTML = html; box.scrollTop = prevScroll; onHover(hoverId); }
   // 프로젝트 필터 목록
   const sel = $('#fProject'), projects = [...new Set(list.filter((s) => !s.parentId).map(projOf))].sort();
