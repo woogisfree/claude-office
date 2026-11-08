@@ -5,13 +5,12 @@ const hex = (c) => { if (c[0] !== '#') { const m = c.match(/\d+/g); return [+m[0
 const mix = (a, b, t) => { const x = hex(a), y = hex(b); return `rgb(${x.map((v, i) => Math.round(lerp(v, y[i], t))).join(',')})`; };
 function disc(g, cx, cy, r, c) { g.fillStyle = c; for (let dy = -r; dy <= r; dy++) { const dx = Math.floor(Math.sqrt(r * r - dy * dy + 0.5)); g.fillRect(Math.round(cx) - dx, Math.round(cy) + dy, dx * 2 + 1, 1); } }
 
-const sunInfo = { sunrise: 6, sunset: 19, manual: false, ok: false, weather: 0 };
+const sunInfo = { sunrise: 6, sunset: 19, manual: false, ok: false, weather: 0, utcOffset: null };
 try { Object.assign(sunInfo, JSON.parse(localStorage.getItem('office.sun') || '{}')); } catch {}
 
 function currentHour() {
   if (hourOverride !== null) return hourOverride;
-  const d = new Date();
-  return d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600;
+  return cityClock(Date.now(), sunInfo.utcOffset).hour;
 }
 const curWeather = () => (theme === 'xmas' ? 71 : weatherOverride !== null ? weatherOverride : sunInfo.weather || 0);
 // WMO 날씨 코드를 화면에서 쓰는 분류로 바꾼다.
@@ -111,13 +110,13 @@ function drawWindows(x0, w, y0, h, t) {
 }
 
 function drawClock(cx, cy) {
-  const d = new Date(), mine = theme === 'mine';
+  const c = cityClock(Date.now(), sunInfo.utcOffset), mine = theme === 'mine';
   disc(ctx, cx, cy, 8, OUT); disc(ctx, cx, cy, 7, mine ? '#4a2a22' : '#7a5a3c'); disc(ctx, cx, cy, 6, mine ? '#2a1010' : '#f6f1e4');
   rect(cx - 1, cy - 6, 1, 1, mine ? '#ff6a5a' : '#333'); rect(cx - 1, cy + 5, 1, 1, mine ? '#ff6a5a' : '#333'); rect(cx - 6, cy - 1, 1, 1, mine ? '#ff6a5a' : '#333'); rect(cx + 5, cy - 1, 1, 1, mine ? '#ff6a5a' : '#333');
   const hand = (ang, len, c) => { ctx.fillStyle = c; for (let i = 0; i <= len; i++) ctx.fillRect(Math.round(cx - 1 + Math.sin(ang) * i), Math.round(cy - 1 - Math.cos(ang) * i), 1, 1); };
   const col = mine ? '#ff5a4a' : '#2a2430';
-  hand(((d.getHours() % 12) + d.getMinutes() / 60) / 12 * Math.PI * 2, 3, col);
-  hand(d.getMinutes() / 60 * Math.PI * 2, 5, col);
+  hand(((c.h % 12) + c.m / 60) / 12 * Math.PI * 2, 3, col);
+  hand(c.m / 60 * Math.PI * 2, 5, col);
 }
 
 // 밤에는 실내를 어둡게 덮고 스탠드와 모니터 주변만 단계별로 밝힌다.

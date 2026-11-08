@@ -71,3 +71,16 @@ test('세로 통로와 문이 방 안에 있고 책상 수가 세션 수보다 �
 test('같은 입력이면 같은 배치가 나온다', () => {
   assert.deepEqual(layout(1280, 860, 6), layout(1280, 860, 6));
 });
+
+test('cityClock: 선택한 도시의 현지 시각을 UTC 오프셋으로 계산한다', () => {
+  const at = Date.UTC(2026, 10, 8, 3, 30, 0); // 2026-11-08 03:30 UTC
+  const clock = (off) => vm.runInContext(`cityClock(${at}, ${off})`, ctx);
+  assert.equal(clock(9 * 3600).hour, 12.5); // 서울, 도쿄
+  assert.equal(clock(9 * 3600).h, 12);
+  assert.equal(clock(-5 * 3600).h, 22); // 뉴욕: 전날 22:30
+  assert.equal(clock(-5 * 3600).m, 30);
+  assert.equal(clock(0).hour, 3.5); // 런던
+  assert.equal(clock(19800).hour, 9); // 인도(+5:30)처럼 30분 단위 오프셋
+  const local = vm.runInContext(`cityClock(${at}, null)`, ctx);
+  assert.equal(local.h, new Date(at).getHours()); // 오프셋이 없으면 이 컴퓨터의 시각
+});

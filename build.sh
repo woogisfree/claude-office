@@ -37,6 +37,7 @@ swiftc -O -o "$APP/Contents/MacOS/ClaudeOffice" app/main.swift -target "$ARCH-ap
 cp app/Info.plist "$APP/Contents/Info.plist"
 cp -R server "$APP/Contents/Resources/server"
 [ -f app/AppIcon.icns ] && cp app/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+[ -f app/StatusIcon.png ] && cp app/StatusIcon.png "$APP/Contents/Resources/StatusIcon.png"
 codesign --force --deep --sign - "$APP"
 echo "완료: $APP ($ARCH, Node $("$NODE_BIN" -v))"
 

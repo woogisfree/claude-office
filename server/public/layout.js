@@ -12,13 +12,22 @@ const ZOOMS = { small: 2, normal: 3, large: 4 };
 
 let theme = params.get('theme') || 'office';
 let baseZoom = Number(params.get('zoom')) || 3;
-let fireThresholdK = 200; // 분당 k 토큰
+let fireThresholdK = 120; // 분당 k 토큰
 let hourOverride = params.has('hour') ? Number(params.get('hour')) : null;
 let weatherOverride = params.has('weather') ? Number(params.get('weather')) : null;
 
 window.setTheme = (t) => { theme = t; fetch('/api/theme', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ theme: t }) }).catch(() => {}); resize(); };
+window.setCity = (key) => fetch('/api/location', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ city: key }) }).then(() => window.pollSun && window.pollSun()).catch(() => {});
 window.setZoom = (z) => { baseZoom = ZOOMS[z] || Number(z) || 3; resize(); };
-window.setFireThreshold = (k) => { fireThresholdK = Number(k) || 200; };
+window.setFireThreshold = (k) => { fireThresholdK = Number(k) || 120; };
+
+// 선택한 도시의 현지 시각이다. offsetSec(UTC 오프셋, 초)가 없으면 이 컴퓨터의 시각을 쓴다.
+function cityClock(nowMs, offsetSec) {
+  const d = new Date(offsetSec === null || offsetSec === undefined ? nowMs : nowMs + offsetSec * 1000);
+  const local = offsetSec === null || offsetSec === undefined;
+  const h = local ? d.getHours() : d.getUTCHours(), m = local ? d.getMinutes() : d.getUTCMinutes(), s = local ? d.getSeconds() : d.getUTCSeconds();
+  return { h, m, hour: h + m / 60 + s / 3600 };
+}
 
 function hash(str) {
   let h = 2166136261;

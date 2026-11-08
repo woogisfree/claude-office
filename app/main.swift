@@ -4,6 +4,10 @@ import WebKit
 import UserNotifications
 import ServiceManagement
 
+// 시스템 언어가 한국어이면 한국어 문구를, 그 밖에는 영어 문구를 쓴다.
+let isKorean = (Locale.preferredLanguages.first ?? "en").hasPrefix("ko")
+func L(_ ko: String, _ en: String) -> String { isKorean ? ko : en }
+
 let log = (NSHomeDirectory() as NSString).appendingPathComponent("Library/Logs/Claude Office.log")
 func writeLog(_ s: String) {
     let line = "\(Date()) \(s)\n"
@@ -67,13 +71,13 @@ final class UsageFetcher: NSObject, WKNavigationDelegate {
         web.callAsyncJavaScript(js, arguments: [:], in: nil, in: .page) { r in
             switch r {
             case .success(let v):
-                guard let s = v as? String, let d = s.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { done(.failure(err("빈 응답"))); return }
+                guard let s = v as? String, let d = s.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { done(.failure(err("empty response"))); return }
                 let status = o["status"] as? Int ?? 0
                 if status == 200, let data = o["data"], let out = try? JSONSerialization.data(withJSONObject: data), let text = String(data: out, encoding: .utf8) { done(.success(text)) }
                 else { done(.failure(err("HTTP \(status) \(o["step"] as? String ?? "") \(o["msg"] as? String ?? "")"))) }
             case .failure(let e):
                 let m = (e as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String ?? e.localizedDescription
-                done(.failure(err("JS 예외: \(m)")))
+                done(.failure(err("JS exception: \(m)")))
             }
         }
     }
@@ -99,13 +103,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     var theme: String { d.string(forKey: "theme") ?? "office" }
     var zoom: String { d.string(forKey: "zoom") ?? "normal" }
-    var threshold: Int { d.object(forKey: "threshold") as? Int ?? 200 }
+    // 창밖 날씨와 일출·일몰을 가져올 도시. 키는 server.mjs의 CITIES와 같아야 한다.
+    var city: String { d.string(forKey: "city") ?? "seoul" }
+    // 카페인 폭주 기준(분당 k 토큰)은 120으로 고정한다.
+    let threshold = 120
 
     func applicationDidFinishLaunching(_ n: Notification) {
         NSApp.setActivationPolicy(.regular)
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.title = "🏢"
+        // 메뉴 막대 아이콘: 앱 아이콘과 같은 색의 픽셀 마스코트. 32px 이미지를 16pt로 보여 줘서 고해상도 화면에서 또렷하다.
+        if let path = Bundle.main.path(forResource: "StatusIcon", ofType: "png"), let img = NSImage(contentsOfFile: path) {
+            img.size = NSSize(width: 16, height: 16)
+            statusItem.button?.image = img
+            statusItem.button?.imagePosition = .imageLeft
+        } else { statusItem.button?.title = "🏢" }
         buildMenu()
         buildWindow()
         startServer()
@@ -114,36 +126,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     func applicationShouldHandleReopen(_ app: NSApplication, hasVisibleWindows: Bool) -> Bool { showWindow(); return true }
     func applicationWillTerminate(_ n: Notification) { server?.terminate() }
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
-        let m = NSMenu(); m.addItem(withTitle: "사무실 열기", action: #selector(showWindow), keyEquivalent: ""); return m
+        let m = NSMenu(); m.addItem(withTitle: L("사무실 열기", "Open Office"), action: #selector(showWindow), keyEquivalent: ""); return m
     }
 
     // MARK: 메뉴
     func buildMenu() {
         let m = NSMenu()
-        m.addItem(withTitle: "사무실 열기", action: #selector(showWindow), keyEquivalent: "o")
+        m.addItem(withTitle: L("사무실 열기", "Open Office"), action: #selector(showWindow), keyEquivalent: "o")
         m.addItem(.separator())
-        let t = NSMenuItem(title: "테마", action: nil, keyEquivalent: ""); let ts = NSMenu()
-        for (k, v) in [("office", "사무실"), ("mine", "탄광"), ("xmas", "크리스마스")] { let i = NSMenuItem(title: v, action: #selector(pickTheme(_:)), keyEquivalent: ""); i.representedObject = k; i.state = theme == k ? .on : .off; ts.addItem(i) }
+        let t = NSMenuItem(title: L("테마", "Theme"), action: nil, keyEquivalent: ""); let ts = NSMenu()
+        for (k, v) in [("office", L("사무실", "Office")), ("mine", L("탄광", "Mine")), ("xmas", L("크리스마스", "Christmas"))] { let i = NSMenuItem(title: v, action: #selector(pickTheme(_:)), keyEquivalent: ""); i.representedObject = k; i.state = theme == k ? .on : .off; ts.addItem(i) }
         t.submenu = ts; m.addItem(t)
-        let z = NSMenuItem(title: "사무실 크기", action: nil, keyEquivalent: ""); let zs = NSMenu()
-        for (k, v) in [("small", "작게"), ("normal", "보통"), ("large", "크게")] { let i = NSMenuItem(title: v, action: #selector(pickZoom(_:)), keyEquivalent: ""); i.representedObject = k; i.state = zoom == k ? .on : .off; zs.addItem(i) }
+        let z = NSMenuItem(title: L("사무실 크기", "Office Size"), action: nil, keyEquivalent: ""); let zs = NSMenu()
+        for (k, v) in [("small", L("작게", "Small")), ("normal", L("보통", "Medium")), ("large", L("크게", "Large"))] { let i = NSMenuItem(title: v, action: #selector(pickZoom(_:)), keyEquivalent: ""); i.representedObject = k; i.state = zoom == k ? .on : .off; zs.addItem(i) }
         z.submenu = zs; m.addItem(z)
-        m.addItem(withTitle: "토큰 과다 기준 (현재 \(threshold)k/분)…", action: #selector(askThreshold), keyEquivalent: "")
-        let login = NSMenuItem(title: "로그인할 때 열기", action: #selector(toggleLogin(_:)), keyEquivalent: "")
+        let c = NSMenuItem(title: L("날씨 위치", "Weather Location"), action: nil, keyEquivalent: ""); let cs = NSMenu()
+        for (k, v) in [("seoul", L("서울", "Seoul")), ("tokyo", L("도쿄", "Tokyo")), ("newyork", L("뉴욕", "New York")), ("london", L("런던", "London")), ("sydney", L("시드니", "Sydney"))] { let i = NSMenuItem(title: v, action: #selector(pickCity(_:)), keyEquivalent: ""); i.representedObject = k; i.state = city == k ? .on : .off; cs.addItem(i) }
+        c.submenu = cs; m.addItem(c)
+        let login = NSMenuItem(title: L("로그인할 때 열기", "Open at Login"), action: #selector(toggleLogin(_:)), keyEquivalent: "")
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off; m.addItem(login)
         m.addItem(.separator())
-        m.addItem(withTitle: "종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        m.addItem(withTitle: L("종료", "Quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = m
-        NSApp.mainMenu = { let mm = NSMenu(); let it = NSMenuItem(); mm.addItem(it); let sub = NSMenu(); sub.addItem(withTitle: "종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"); it.submenu = sub; return mm }()
+        NSApp.mainMenu = { let mm = NSMenu(); let it = NSMenuItem(); mm.addItem(it); let sub = NSMenu(); sub.addItem(withTitle: L("종료", "Quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"); it.submenu = sub; return mm }()
     }
     @objc func pickTheme(_ s: NSMenuItem) { d.set(s.representedObject as? String, forKey: "theme"); buildMenu(); pushSettings() }
+    @objc func pickCity(_ s: NSMenuItem) { d.set(s.representedObject as? String, forKey: "city"); buildMenu(); pushSettings() }
     @objc func pickZoom(_ s: NSMenuItem) { d.set(s.representedObject as? String, forKey: "zoom"); buildMenu(); pushSettings() }
-    @objc func askThreshold() {
-        let a = NSAlert(); a.messageText = "토큰 과다 기준"; a.informativeText = "분당 k 토큰 단위로 입력하세요."
-        let f = NSTextField(frame: NSRect(x: 0, y: 0, width: 120, height: 24)); f.stringValue = String(threshold); a.accessoryView = f
-        a.addButton(withTitle: "저장"); a.addButton(withTitle: "취소")
-        if a.runModal() == .alertFirstButtonReturn, let v = Int(f.stringValue), v > 0 { d.set(v, forKey: "threshold"); buildMenu(); pushSettings() }
-    }
     @objc func toggleLogin(_ s: NSMenuItem) {
         do { if SMAppService.mainApp.status == .enabled { try SMAppService.mainApp.unregister() } else { try SMAppService.mainApp.register() } } catch { writeLog("login item: \(error)") }
         buildMenu()
@@ -168,12 +177,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         window.makeKeyAndOrderFront(nil)
     }
     func loadingHTML() -> String {
-        let msg = ["office": "사무실 문 여는 중", "mine": "탄광으로 들어가는 중", "xmas": "선물 작업실 문 여는 중"][theme] ?? "문 여는 중"
+        let msg = ["office": L("사무실 문 여는 중", "Opening the office"), "mine": L("탄광으로 들어가는 중", "Heading into the mine"), "xmas": L("선물 작업실 문 여는 중", "Opening the workshop")][theme] ?? L("문 여는 중", "Opening")
         return "<body style='background:#1d1f27;color:#e8e9ee;font:15px -apple-system;display:flex;align-items:center;justify-content:center;height:100vh'>\(msg)…</body>"
     }
     @objc func showWindow() { NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil) }
     func pushSettings() {
-        let js = "window.setTheme&&setTheme('\(theme)');window.setZoom&&setZoom('\(zoom)');window.setFireThreshold&&setFireThreshold(\(threshold));"
+        let js = "window.setTheme&&setTheme('\(theme)');window.setZoom&&setZoom('\(zoom)');window.setFireThreshold&&setFireThreshold(\(threshold));window.setCity&&setCity('\(city)');"
         web.evaluateJavaScript(js, completionHandler: nil)
     }
     func webView(_ w: WKWebView, didFinish n: WKNavigation!) { if baseURL != nil { pushSettings(); pushUsage() } }
@@ -221,7 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let wv = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
         wv.load(URLRequest(url: URL(string: "https://claude.ai/login")!))
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 720), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-        w.title = "claude.ai 로그인"; w.contentView = wv; w.center(); w.isReleasedWhenClosed = false; w.delegate = self
+        w.title = L("claude.ai 로그인", "claude.ai Login"); w.contentView = wv; w.center(); w.isReleasedWhenClosed = false; w.delegate = self
         loginWin = w
         NSApp.activate(ignoringOtherApps: true); w.makeKeyAndOrderFront(nil)
         // 로그인이 끝나면 사용량 요청이 성공하므로, 창이 열려 있는 동안 3초마다 시도하고 성공하면 창을 닫는다.
@@ -253,7 +262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
     func startServer() {
         guard let (node, path) = findNode() else {
-            let a = NSAlert(); a.messageText = "Node.js를 찾지 못했습니다"; a.informativeText = "Node.js 18 이상을 설치한 뒤 앱을 다시 실행하세요."; a.runModal(); statusItem.button?.title = "⚠️"; return
+            let a = NSAlert(); a.messageText = L("Node.js를 찾지 못했습니다", "Node.js not found"); a.informativeText = L("Node.js 18 이상을 설치한 뒤 앱을 다시 실행하세요.", "Install Node.js 18 or later and relaunch the app."); a.runModal(); statusItem.button?.title = "⚠️"; return
         }
         guard let res = Bundle.main.resourcePath else { return }
         let script = (res as NSString).appendingPathComponent("server/server.mjs")
@@ -296,9 +305,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     var usage: Usage?
     var count = 0
     func refreshTitle() {
-        var t = "🏢 \(count)"
-        if let f = appFive { t += " · \(max(0, 100 - Int(f.rounded())))% 남음" }
-        else if let u = usage, u.ok, let f = u.fiveHour { t += " · \(max(0, 100 - Int(f.pct.rounded())))% 남음" }
+        var t = statusItem.button?.image == nil ? "🏢 \(count)" : " \(count)"
+        if let f = appFive { t += " · \(max(0, 100 - Int(f.rounded())))% \(L("남음", "left"))" }
+        else if let u = usage, u.ok, let f = u.fiveHour { t += " · \(max(0, 100 - Int(f.pct.rounded())))% \(L("남음", "left"))" }
         statusItem.button?.title = t
     }
     func handle(_ list: [Session]) {
@@ -307,10 +316,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             let prev = lastStatus[s.sessionId]
             if s.status == "busy", busySince[s.sessionId] == nil { busySince[s.sessionId] = Date() }
             if let prev, prev != s.status {
-                if s.status == "waiting" { notify("승인 요청", "\(s.name): 확인이 필요합니다.") }
+                if s.status == "waiting" { notify(L("승인 요청", "Approval needed"), L("\(s.name): 확인이 필요합니다.", "\(s.name): needs your attention.")) }
                 else if s.status == "idle", prev == "busy" {
                     let secs = Int(Date().timeIntervalSince(busySince[s.sessionId] ?? Date()))
-                    if s.parentId == nil || secs > 120 { notify("작업 완료", "\(s.name): \(secs / 60)분 \(secs % 60)초 동안 일했습니다.") }
+                    if s.parentId == nil || secs > 120 { notify(L("작업 완료", "Work finished"), L("\(s.name): \(secs / 60)분 \(secs % 60)초 동안 일했습니다.", "\(s.name): worked for \(secs / 60)m \(secs % 60)s.")) }
                 }
             }
             if s.status != "busy" { busySince[s.sessionId] = nil }

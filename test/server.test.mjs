@@ -96,3 +96,20 @@ test('collectSessions: 세션 폴더가 없으면 missing으로 알린다', asyn
   assert.equal(r.missing, true);
   assert.deepEqual(r.list, []);
 });
+
+test('forecastUrl, parseForecast: 도시 좌표로 조회하고 현지 일출·일몰과 UTC 오프셋을 읽는다', () => {
+  const url = new URL(m.forecastUrl(40.7128, -74.006));
+  assert.equal(url.searchParams.get('latitude'), '40.7128');
+  assert.equal(url.searchParams.get('longitude'), '-74.006');
+  assert.equal(url.searchParams.get('timezone'), 'auto');
+  const f = m.parseForecast({ utc_offset_seconds: -18000, daily: { sunrise: ['2026-11-08T06:30'], sunset: ['2026-11-08T16:45'] }, current: { weather_code: 61 } });
+  assert.deepEqual(f, { sunrise: 6.5, sunset: 16.75, weather: 61, utcOffset: -18000 });
+  const g = m.parseForecast({ daily: { sunrise: ['2026-11-08T07:00'], sunset: ['2026-11-08T18:00'] } });
+  assert.equal(g.weather, 0);
+  assert.equal(g.utcOffset, null);
+});
+
+test('CITIES: 대표 도시 5곳이 있고 좌표가 올바른 범위에 있다', () => {
+  assert.deepEqual(Object.keys(m.CITIES), ['seoul', 'tokyo', 'newyork', 'london', 'sydney']);
+  for (const [lat, lon] of Object.values(m.CITIES)) assert.ok(Math.abs(lat) <= 90 && Math.abs(lon) <= 180);
+});

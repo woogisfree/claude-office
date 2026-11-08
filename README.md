@@ -6,6 +6,7 @@
 
 A macOS menu bar app. Every running session gets a desk, and what the session is doing shows up as what the employee is doing.
 
+[![test](https://github.com/woogisfree/claude-office/actions/workflows/test.yml/badge.svg)](https://github.com/woogisfree/claude-office/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/github/license/woogisfree/claude-office)](LICENSE)
 ![Platform: macOS 13+](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey)
 ![Node 18+](https://img.shields.io/badge/node-18%2B-339933)
@@ -29,7 +30,7 @@ A macOS menu bar app. Every running session gets a desk, and what the session is
 - **Glanceable**: know which sessions are working, waiting for you, or idle without switching windows.
 - **Click to jump**: select a session and land in its terminal tab or its Claude desktop chat.
 - **Lightweight and local**: a dependency-free Node server that only reads `~/.claude` and listens on `127.0.0.1`.
-- **Alive**: day and night follow your real sunrise, sunset, and weather. Idle employees even wear party hats on Friday evenings.
+- **Alive**: the view outside the window follows sunrise, sunset, and weather for the city you pick from the menu (Seoul, Tokyo, New York, London, or Sydney), and the wall clock shows that city's local time. Idle employees even wear party hats on Friday evenings.
 
 > **Disclaimer**: This is an unofficial personal project and is not affiliated with Anthropic. "Claude" and "Claude Code" are trademarks of Anthropic.
 
@@ -58,7 +59,7 @@ The app is built with `swiftc` and signed ad hoc, with no Xcode project. No sign
 | Status | Employee behavior |
 |---|---|
 | Working | Sits at the desk and types, alternating hands. The monitor shows code. |
-| Caffeine rush | Token rate above the threshold: wide eyes, shaking, and papers bursting off the stack. |
+| Caffeine rush | Token rate above 120k per minute: wide eyes, shaking, and papers bursting off the stack. |
 | Waiting for approval | Raises a hand and shows a speech bubble. The monitor turns blue. |
 | Idle | Walks along the aisles to the recliner. A small logo bounces on the monitor. |
 | Finished | Walks to the door and goes home. |
@@ -79,6 +80,7 @@ More features:
 - Themes: office, mine, Christmas.
 - Notifications when a working session finishes or waits for approval.
 - Desk spacing adapts to the window size.
+- The interface follows your system language (Korean or English).
 
 ## Usage limits
 
@@ -99,7 +101,7 @@ The second source is an **unofficial endpoint that is not in any official docume
 
 The server reads session transcripts and process info from `~/.claude`, derives each session's status and token rate, and serves a small JSON API plus the UI. The app shell hosts the UI in a WKWebView and adds the menu bar item, notifications, and session focusing.
 
-The only external network traffic is Open-Meteo (weather and sunrise times) and the claude.ai call described above.
+The only external network traffic is Open-Meteo (weather and sunrise times for the selected city) and the claude.ai call described above.
 
 ```
 app/      Swift app shell, Info.plist, icon
