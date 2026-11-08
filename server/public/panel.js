@@ -209,6 +209,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
   pollSessions(); pollUsage(); renderUsage(); pollSun();
   last = 0; // the time spent hidden must not become one huge animation step
+  lastSig = ''; // draw again even if nothing changed, in case the canvas was dropped while hidden
   wake();
 });
 queueLoop();

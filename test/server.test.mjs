@@ -241,3 +241,16 @@ test('collectSessions: callers that arrive during a running collection share its
   assert.equal(await m.collectSessions(), a);
   assert.notEqual(await m.collectSessions(true), a);
 });
+
+test('listProcessArgs: runs ps once within the cache time and again after it', async () => {
+  let calls = 0, clock = Date.now() + 60_000; // later than anything an earlier test cached with the real clock
+  const run = async () => { calls++; return `call ${calls}`; };
+  const now = () => clock;
+  const first = await m.listProcessArgs(run, now);
+  clock += 4000;
+  assert.equal(await m.listProcessArgs(run, now), first);
+  assert.equal(calls, 1);
+  clock += 1500;
+  assert.notEqual(await m.listProcessArgs(run, now), first);
+  assert.equal(calls, 2);
+});

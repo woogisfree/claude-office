@@ -30,6 +30,7 @@ let roomCache = { key: '', canvas: null };
 function drawRoomBase() {
   const key = [theme, L.W, L.H, L.offX, L.cw, L.aisleX].join('|');
   if (roomCache.canvas && roomCache.key === key) { ctx.drawImage(roomCache.canvas, 0, 0); return; }
+  if (ctx.probe) { ctx.note('room cache is rebuilt', Math.random()); return; } // the real pass that follows rebuilds it
   paintRoomBase();
   if (cv.width !== L.W || cv.height !== L.H) { roomCache = { key: '', canvas: null }; return; } // the canvas is not resized yet, so nothing is safe to keep
   const c = roomCache.canvas || document.createElement('canvas');

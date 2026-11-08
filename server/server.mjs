@@ -91,6 +91,6 @@ if (isMain) {
 export { parseLines, cut, stripTags } from './lib/util.mjs';
 export { describeTool, summarize, findTranscript, contextLimit } from './lib/transcripts.mjs';
 export { updateStats, statsView, findTodayStart, SEEK_MIN_BYTES } from './lib/stats.mjs';
-export { collectSessions, buildSubagents, subagentStats, isSameProcess } from './lib/sessions.mjs';
+export { collectSessions, buildSubagents, subagentStats, isSameProcess, listProcessArgs } from './lib/sessions.mjs';
 export { readUsage } from './lib/usage.mjs';
 export { forecastUrl, parseForecast, CITIES } from './lib/sun.mjs';

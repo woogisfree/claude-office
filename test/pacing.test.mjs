@@ -45,13 +45,14 @@ test('chooseFps: 30 while anything walks, shakes, or reacts, or the door moves',
   assert.equal(chooseFps({ ...base, doorOpen: 0.1, employees: [calm] }), 30);
 });
 
-test('chooseFps: 15 for typing or a lively scene, 10 when everyone is still', () => {
+test('chooseFps: 15 for a lively scene, 10 for typing and for a resting office', () => {
   const idle = { phase: 'rest', leaving: false, walking: false, path: [], surprise: 0, sulk: 0, hot: false, data: { status: 'idle' } };
   const busy = { ...idle, phase: 'seated', data: { status: 'busy' } };
   assert.equal(chooseFps({ doorOpen: 0, lively: false, employees: [idle, idle] }), 10);
   assert.equal(chooseFps({ doorOpen: 0, lively: false, employees: [] }), 10);
-  assert.equal(chooseFps({ doorOpen: 0, lively: false, employees: [idle, busy] }), 15);
+  assert.equal(chooseFps({ doorOpen: 0, lively: false, employees: [idle, busy] }), 10);
   assert.equal(chooseFps({ doorOpen: 0, lively: true, employees: [idle] }), 15);
+  assert.equal(chooseFps({ doorOpen: 0, lively: true, employees: [busy] }), 15);
   assert.equal(chooseFps({ doorOpen: 0, lively: true, employees: [{ ...idle, walking: true }] }), 30);
 });
 

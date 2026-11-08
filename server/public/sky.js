@@ -124,6 +124,7 @@ let nightCanvas = null;
 function drawNight(lights) {
   const lv = nightLevel(currentHour());
   if (lv <= 0 || theme === 'mine') return;
+  if (ctx.probe) { ctx.note('night', lv, JSON.stringify(lights), L.win ? [L.win.x, L.win.y, L.win.w, L.win.h] : ''); return; } // the lights are painted on another canvas
   if (!nightCanvas) nightCanvas = document.createElement('canvas');
   if (nightCanvas.width !== L.W || nightCanvas.height !== L.H) { nightCanvas.width = L.W; nightCanvas.height = L.H; }
   const n = nightCanvas.getContext('2d');

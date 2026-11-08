@@ -143,7 +143,23 @@ function drawPapers(d, e, t) {
   }
   ctx.globalAlpha = 1;
 }
+// A frame is first "drawn" into a recorder, which only computes a signature of what would be drawn. When the signature equals the last drawn frame's,
+// the real drawing is skipped. The text layer has its own check, so it is always asked. If the recorder meets something it does not know, it is turned off for good.
+let lastSig = '', probeOff = false;
 function frame(t) {
+  if (!probeOff) {
+    const real = ctx, rec = createRecorder();
+    let sig = null;
+    try { ctx = rec; drawScene(t); sig = rec.signature(); }
+    catch (e) { probeOff = true; post('log:frame probe turned off: ' + e.message); }
+    finally { ctx = real; }
+    if (sig !== null && sig === lastSig) { drawText(t); return; }
+    lastSig = sig === null ? '' : sig;
+  }
+  drawScene(t);
+  drawText(t);
+}
+function drawScene(t) {
   ctx.imageSmoothingEnabled = false;
   const lights = [];
   drawRoom(t);
@@ -168,7 +184,6 @@ function frame(t) {
   items.sort((a, b) => a.key - b.key).forEach((i) => i.fn());
   drawMotes(t);
   drawNight(lights);
-  drawText(t);
 }
 
 // ───────── Text layer: name tags and speech bubbles ─────────
@@ -295,7 +310,7 @@ function resize() {
   wrap.style.width = cw + 'px'; wrap.style.height = ch + 'px';
   cv.style.width = cw + 'px'; cv.style.height = ch + 'px';
   // Only reassign the canvas size when it really changes, because assigning clears the content and causes flicker.
-  if (cv.width !== L.W || cv.height !== L.H) { cv.width = L.W; cv.height = L.H; }
+  if (cv.width !== L.W || cv.height !== L.H) { cv.width = L.W; cv.height = L.H; lastSig = ''; }
   const dw = Math.round(cw * devicePixelRatio), dh = Math.round(ch * devicePixelRatio);
   if (tcv.width !== dw || tcv.height !== dh) { tcv.width = dw; tcv.height = dh; tcv.style.width = cw + 'px'; tcv.style.height = ch + 'px'; }
   const sig = `${L.leftCols}|${L.desks}|${L.zoom}|${L.offX}|${L.gx}|${L.rowPitch}`;

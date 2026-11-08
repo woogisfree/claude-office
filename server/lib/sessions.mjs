@@ -93,8 +93,19 @@ export async function buildSubagents(parent, transcript) {
   return { items: out, tokensToday: stats.tokensToday, weightedPerMin: stats.weightedPerMin };
 }
 
+// The process list only changes when a teammate starts or stops, so a few seconds old is fine. Reading it spawns `ps` over every process,
+// and the UI and the app ask for the sessions every couple of seconds.
+const PS_TTL_MS = 5000;
+let psCache = { at: 0, text: '' };
+export async function listProcessArgs(run = sh, now = Date.now) {
+  if (now() - psCache.at < PS_TTL_MS) return psCache.text;
+  const text = await run('ps', ['-axo', 'pid=,args=']);
+  psCache = { at: now(), text };
+  return text;
+}
+
 async function buildTeammates(parents) {
-  const ps = await sh('ps', ['-axo', 'pid=,args=']);
+  const ps = await listProcessArgs();
   const out = [];
   for (const line of ps.split('\n')) {
     const m = line.match(/^\s*(\d+)\s+(.*)$/);

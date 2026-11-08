@@ -1,19 +1,17 @@
 // Frame pacing: how often the office is drawn. The frame rate follows what is moving, and the loop sleeps between frames.
 // Every frame costs the app and the GPU process about the same, so a calm office should not be drawn at 30 frames per second.
 // This file has no dependency on the page, so the tests can run it with a simulated clock.
-const FPS_FAST = 30, FPS_MID = 15, FPS_CALM = 10;
+const FPS_FAST = 30, FPS_LIVELY = 15, FPS_CALM = 10;
 
-// Walking, the door, and caffeine-rush shaking need 30 to look smooth. Typing, falling rain, and flames look fine at 15.
-// When everyone is resting, the room changes only in small steps (a blinking cursor, a bouncing logo), so 10 is enough.
-// `lively` is true for a scene with constant motion of its own (rain, snow, or the mine and Christmas themes).
+// Walking, the door, and caffeine-rush shaking need 30 to look smooth. Falling rain, snow, and flames look fine at 15.
+// Everything else changes in small steps: the typing hands alternate 5 times a second, which is two frames each at 10, and a resting office
+// has a blinking cursor and a bouncing logo. `lively` is true for a scene with constant motion of its own (rain, snow, or the mine and Christmas themes).
 function chooseFps({ doorOpen, lively, employees }) {
   if (doorOpen > 0) return FPS_FAST;
-  let mid = lively;
   for (const e of employees) {
     if (e.phase === 'enter' || e.leaving || e.walking || e.path.length || e.surprise > 0 || e.sulk > 0 || e.hot) return FPS_FAST;
-    if (e.data && e.data.status === 'busy') mid = true;
   }
-  return mid ? FPS_MID : FPS_CALM;
+  return lively ? FPS_LIVELY : FPS_CALM;
 }
 
 // Calls draw(ms) at the rate fps() asks for. raf, setTimer, clearTimer, and hidden are passed in so a test can replace them.
