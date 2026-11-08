@@ -140,6 +140,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     var zoom: String { d.string(forKey: "zoom") ?? "normal" }
     // City used for the weather and sunrise/sunset outside the window. The key must match CITIES in server.mjs.
     var city: String { d.string(forKey: "city") ?? "seoul" }
+    // Hours a session may rest before it leaves the office (0 = never). Only the office hides it; the session itself keeps running.
+    var autoLeave: Int { d.integer(forKey: "autoLeave") }
     // The caffeine-rush threshold (thousands of weighted tokens per minute) is fixed at 120.
     let threshold = 120
 
@@ -179,6 +181,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let c = NSMenuItem(title: L("날씨 위치", "Weather Location"), action: nil, keyEquivalent: ""); let cs = NSMenu()
         for (k, v) in [("seoul", L("서울", "Seoul")), ("tokyo", L("도쿄", "Tokyo")), ("newyork", L("뉴욕", "New York")), ("london", L("런던", "London")), ("sydney", L("시드니", "Sydney"))] { let i = NSMenuItem(title: v, action: #selector(pickCity(_:)), keyEquivalent: ""); i.representedObject = k; i.state = city == k ? .on : .off; cs.addItem(i) }
         c.submenu = cs; m.addItem(c)
+        let al = NSMenuItem(title: L("자동 퇴근", "Auto Clock-Out"), action: nil, keyEquivalent: ""); let als = NSMenu()
+        for (h, v) in [(0, L("사용 안 함", "Off")), (2, L("2시간 대기 후", "After 2 hours idle")), (4, L("4시간 대기 후", "After 4 hours idle")), (8, L("8시간 대기 후", "After 8 hours idle"))] { let i = NSMenuItem(title: v, action: #selector(pickAutoLeave(_:)), keyEquivalent: ""); i.representedObject = h; i.state = autoLeave == h ? .on : .off; als.addItem(i) }
+        al.submenu = als; m.addItem(al)
         let nt = NSMenuItem(title: L("알림", "Notifications"), action: nil, keyEquivalent: ""); let ns = NSMenu()
         let on = NSMenuItem(title: L("알림 받기", "Show Notifications"), action: #selector(toggleNotify(_:)), keyEquivalent: ""); on.state = notifyEnabled ? .on : .off; ns.addItem(on)
         ns.addItem(.separator())
@@ -194,6 +199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
     @objc func pickTheme(_ s: NSMenuItem) { d.set(s.representedObject as? String, forKey: "theme"); buildMenu(); pushSettings() }
     @objc func pickCity(_ s: NSMenuItem) { d.set(s.representedObject as? String, forKey: "city"); buildMenu(); pushSettings() }
+    @objc func pickAutoLeave(_ s: NSMenuItem) { d.set(s.representedObject as? Int ?? 0, forKey: "autoLeave"); buildMenu(); pushSettings() }
     @objc func pickZoom(_ s: NSMenuItem) { d.set(s.representedObject as? String, forKey: "zoom"); buildMenu(); pushSettings() }
     @objc func toggleNotify(_ s: NSMenuItem) { d.set(!notifyEnabled, forKey: "notify"); buildMenu() }
     @objc func pickQuiet(_ s: NSMenuItem) { d.set(s.representedObject as? String, forKey: "quiet"); buildMenu() }
@@ -226,7 +232,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
     @objc func showWindow() { NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil) }
     func pushSettings() {
-        let js = "window.setTheme&&setTheme('\(theme)');window.setZoom&&setZoom('\(zoom)');window.setFireThreshold&&setFireThreshold(\(threshold));window.setCity&&setCity('\(city)');"
+        let js = "window.setTheme&&setTheme('\(theme)');window.setZoom&&setZoom('\(zoom)');window.setFireThreshold&&setFireThreshold(\(threshold));window.setCity&&setCity('\(city)');window.setAutoLeave&&setAutoLeave(\(autoLeave));"
         web.evaluateJavaScript(js, completionHandler: nil)
     }
     func webView(_ w: WKWebView, didFinish n: WKNavigation!) { if baseURL != nil { pushSettings(); pushUsage() } }
