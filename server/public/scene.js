@@ -66,18 +66,40 @@ function applySessions(list) {
       const trail = e.visited.slice().reverse();
       const out = [{ x: L.aisleX, y: L.corrY }, { x: L.doorX, y: L.corrY }, doorPos()];
       // 자리에 있거나 쉬던 중이면 현재 x에서 아래 통로로 내려간 뒤 세로 통로로 이동한다. 어느 단계에서든 축을 따라서만 움직인다.
-      const lane = laneY(d);
       // 지금 걷는 경로의 끝에서 출발한다고 보고, 그곳이 리클라이너면 아래 통로로, 책상 자리면 왼쪽 옆길로 나간다.
       const last = e.path.length ? e.path[e.path.length - 1] : { x: e.x, y: e.y };
-      const exitRoute = last.x > d.x + 40 ? [{ x: last.x, y: lane }, { x: L.aisleX, y: lane }] : [{ x: sideX(d), y: s.y }, { x: sideX(d), y: lane }, { x: L.aisleX, y: lane }];
-      e.path = (e.visited.length && !e.seated ? trail : e.path.concat(exitRoute)).concat(out);
+      e.leaveFromRest = last.x > d.x + 40;
+      e.path = (e.visited.length && !e.seated ? trail : e.path.concat(exitRoute(d, s, e.leaveFromRest, last.x))).concat(out);
       if (e.x === -100) { emps.delete(e.id); deskOf.delete(e.id); }
     }
   }
 }
 
+// 자리나 리클라이너에서 세로 통로로 나가는 경로. 어느 단계에서든 축을 따라서만 움직인다.
+function exitRoute(d, s, fromRest, lastX) {
+  const lane = laneY(d);
+  return fromRest ? [{ x: lastX, y: lane }, { x: L.aisleX, y: lane }] : [{ x: sideX(d), y: s.y }, { x: sideX(d), y: lane }, { x: L.aisleX, y: lane }];
+}
+
+// 입장 중에 상태가 바뀌어 목적지(자리 또는 리클라이너)가 달라졌을 때, 자리까지 갔다가 되돌아가지 않고 지금 위치에서 옆길을 거쳐 바로 새 목적지로 향한다.
+function replanEntry(e) {
+  const d = deskPos(e.desk), lane = laneY(d), sx = sideX(d);
+  const tail = entryTail(e); // e.dest 를 현재 상태에 맞게 다시 정하고 옆길 입구 기준의 꼬리 경로를 돌려준다.
+  const pts = [];
+  if (Math.abs(e.y - lane) > 1) {
+    // 자리 쪽 가로 구간이나 옆길 위에 있으면 옆길로 먼저 나와 아래 통로까지 내려간다.
+    if (Math.abs(e.x - sx) > 1) pts.push({ x: sx, y: e.y });
+    pts.push({ x: sx, y: lane });
+  } else if (e.dest === 'seat' && Math.abs(e.x - sx) > 1) {
+    // 아래 통로를 따라 리클라이너로 가던 중이면 옆길 입구로 되돌아간다.
+    pts.push({ x: sx, y: lane });
+  }
+  e.path = pts.concat(tail);
+}
+
 function step(e, dt, nowMs) {
   if (e.x === -100) { e.delay -= dt; if (e.delay > 0) return; const dp = doorPos(); e.x = dp.x; e.y = dp.y; e.path = entryPath(e); }
+  if (!e.leaving && e.phase === 'enter' && e.dest && e.data && (e.data.status === 'idle' ? 'rest' : 'seat') !== e.dest) replanEntry(e);
   if (e.path.length) {
     const tg = e.path[0], dx = tg.x - e.x, dy = tg.y - e.y, dist = Math.hypot(dx, dy), mv = 44 * dt;
     if (Math.abs(dx) > Math.abs(dy)) { e.face = 'side'; e.flip = dx < 0; } else e.face = dy < 0 ? 'back' : 'front';
@@ -287,10 +309,16 @@ function resize() {
   const sig = `${L.leftCols}|${L.desks}|${L.zoom}|${L.offX}|${L.gx}|${L.rowPitch}`;
   if (sig !== layoutSig) {
     layoutSig = sig;
-    // 배치가 바뀌면 이동 중이던 경로의 좌표도 낡으므로, 걷던 직원은 도착지로 옮기고 퇴근하던 직원은 내보낸다. 낡은 좌표로 걸으면 대각선으로 가로지르게 된다.
+    // 배치가 바뀌면 이동 중이던 경로의 좌표도 낡으므로, 걷던 직원은 도착지로 옮기고 퇴근하던 직원은 출발점에서 문까지 경로를 다시 잡는다. 낡은 좌표로 걸으면 대각선으로 가로지르게 된다.
     for (const e of [...emps.values()]) {
       if (e.x === -100) continue;
-      if (e.leaving) { emps.delete(e.id); deskOf.delete(e.id); continue; }
+      if (e.leaving) {
+        // 퇴근하던 직원은 사라지지 않고, 새 배치의 출발점(자리 또는 리클라이너)에서 문까지 경로를 다시 짠다.
+        const d = deskPos(e.desk), s = seatPos(d), p = e.leaveFromRest ? restPos(d) : s;
+        e.x = p.x; e.y = p.y;
+        e.path = exitRoute(d, s, e.leaveFromRest, p.x).concat([{ x: L.aisleX, y: L.corrY }, { x: L.doorX, y: L.corrY }, doorPos()]);
+        continue;
+      }
       if (e.path.length) { e.path = []; e.walking = false; if (e.phase === 'enter') { e.phase = e.data && e.data.status === 'idle' ? 'rest' : 'seated'; e.seated = true; } }
       const d = deskPos(e.desk), p = e.phase === 'rest' ? restPos(d) : seatPos(d); e.x = p.x; e.y = p.y;
     }
