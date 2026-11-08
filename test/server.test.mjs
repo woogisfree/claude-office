@@ -113,3 +113,59 @@ test('CITIES: has the five cities and their coordinates are in range', () => {
   assert.deepEqual(Object.keys(m.CITIES), ['seoul', 'tokyo', 'newyork', 'london', 'sydney']);
   for (const [lat, lon] of Object.values(m.CITIES)) assert.ok(Math.abs(lat) <= 90 && Math.abs(lon) <= 180);
 });
+
+test('buildSubagents: adds every subagent transcript of today, finished ones included, to the parent totals', async () => {
+  const now = new Date().toISOString();
+  const yesterday = new Date(Date.now() - 36 * 3600_000).toISOString();
+  const row = (id, ts, out) => ({ type: 'assistant', timestamp: ts, message: { id, role: 'assistant', usage: { output_tokens: out }, content: [] } });
+  const transcript = path.join(TMP, 'parent.jsonl');
+  const sub = path.join(TMP, 'parent', 'subagents');
+  fs.mkdirSync(sub, { recursive: true });
+  const write = (name, rows) => fs.writeFileSync(path.join(sub, name), rows.map(line).join('\n') + '\n');
+  // a1 is still running, a2 has finished (no longer listed, but its tokens still count), a3 only has yesterday's lines.
+  write('a1.jsonl', [row('x1', now, 10)]);
+  fs.writeFileSync(path.join(sub, 'a1.meta.json'), line({ description: 'running agent' }));
+  write('a2.jsonl', [row('x2', now, 20)]);
+  fs.writeFileSync(path.join(sub, 'a2.meta.json'), line({ description: 'done agent', finished: true }));
+  write('a3.jsonl', [row('x3', yesterday, 30)]);
+  const r = await m.buildSubagents({ sessionId: 'parent', pid: 1, cwd: '/x' }, transcript);
+  assert.equal(r.tokensToday, 150); // (10 + 20) output tokens, weighted by 5
+  assert.deepEqual(r.items.map((i) => [i.name, i.tokensToday]), [['running agent', 50]]);
+});
+
+test('updateStats: a large transcript is not read from the start, and the result matches a full read', async () => {
+  const now = new Date().toISOString();
+  const old = new Date(Date.now() - 72 * 3600_000).toISOString();
+  const row = (id, ts, out, pad = '') => line({ type: 'assistant', timestamp: ts, message: { id, role: 'assistant', usage: { output_tokens: out }, content: [], pad } });
+  // About 20 MB of old lines (some of them huge), then today's lines.
+  const parts = [];
+  const filler = 'x'.repeat(2000);
+  for (let i = 0; i < 10000; i++) parts.push(row('old' + i, old, 1000, filler));
+  parts.push(row('huge', old, 1000, 'y'.repeat(300000)));
+  parts.push(row('t1', now, 10), row('t2', now, 20));
+  const f = path.join(TMP, 'big.jsonl');
+  fs.writeFileSync(f, parts.join('\n') + '\n');
+  assert.ok(fs.statSync(f).size > m.SEEK_MIN_BYTES, 'the test file must exceed the seek threshold');
+  const fh = await fs.promises.open(f, 'r');
+  let start;
+  try { start = await m.findTodayStart(fh, fs.statSync(f).size, new Date().setHours(0, 0, 0, 0)); } finally { await fh.close(); }
+  assert.ok(start > 10 * 1024 * 1024, `the search should skip most of the file (start=${start})`);
+  assert.equal(fs.readFileSync(f).subarray(start - 1, start).toString(), '\n', 'the offset must be the start of a line');
+  assert.equal(m.statsView(await m.updateStats(f)).tokensToday, 150); // (10 + 20) output tokens, weighted by 5
+});
+
+test('findTodayStart: returns 0 when the whole file is from today', async () => {
+  const now = new Date().toISOString();
+  const f = path.join(TMP, 'today.jsonl');
+  fs.writeFileSync(f, Array.from({ length: 5000 }, (_, i) => line({ type: 'assistant', timestamp: now, message: { id: 'a' + i, usage: { output_tokens: 1 }, pad: 'z'.repeat(500) } })).join('\n') + '\n');
+  const fh = await fs.promises.open(f, 'r');
+  try { assert.equal(await m.findTodayStart(fh, fs.statSync(f).size, new Date().setHours(0, 0, 0, 0)), 0); } finally { await fh.close(); }
+});
+
+test('findTranscript: a session that is not found does not block the search for another one', async () => {
+  const projects = path.join(TMP, 'projects', 'some-other-folder');
+  fs.mkdirSync(projects, { recursive: true });
+  fs.writeFileSync(path.join(projects, 'found-id.jsonl'), '');
+  assert.equal(await m.findTranscript('missing-id', '/no/such/cwd'), null); // starts its own 30-second limit
+  assert.equal(await m.findTranscript('found-id', '/no/such/cwd'), path.join(projects, 'found-id.jsonl'));
+});

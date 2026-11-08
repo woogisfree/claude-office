@@ -50,19 +50,20 @@ const parseLines = (text) => {
 
 // ───────────────────────── Finding transcripts ─────────────────────────
 const transcriptCache = new Map(); // sessionId -> path
-let lastFullScan = 0;
+const lastFullScan = new Map(); // sessionId -> time of the last scan of every project folder (each session has its own 30-second limit)
+const exists = (p) => fsp.access(p).then(() => true, () => false);
 async function findTranscript(sessionId, cwd) {
   const cached = transcriptCache.get(sessionId);
-  if (cached && fs.existsSync(cached)) return cached;
+  if (cached && (await exists(cached))) return cached;
   const dir = path.join(PROJECTS_DIR, String(cwd || '').replace(/[^a-zA-Z0-9]/g, '-'));
   const direct = path.join(dir, `${sessionId}.jsonl`);
-  if (fs.existsSync(direct)) { transcriptCache.set(sessionId, direct); return direct; }
-  if (Date.now() - lastFullScan < 30_000) return null;
-  lastFullScan = Date.now();
+  if (await exists(direct)) { transcriptCache.set(sessionId, direct); return direct; }
+  if (Date.now() - (lastFullScan.get(sessionId) || 0) < 30_000) return null;
+  lastFullScan.set(sessionId, Date.now());
   try {
     for (const d of await fsp.readdir(PROJECTS_DIR)) {
       const p = path.join(PROJECTS_DIR, d, `${sessionId}.jsonl`);
-      if (fs.existsSync(p)) { transcriptCache.set(sessionId, p); return p; }
+      if (await exists(p)) { transcriptCache.set(sessionId, p); return p; }
     }
   } catch { /* folder missing */ }
   return null;
@@ -139,6 +140,41 @@ async function updateStats(file) {
   await next;
   return statsState.get(file);
 }
+// Files larger than this are not read from the start on the first scan: the offset of today's first line is searched for instead.
+const SEEK_MIN_BYTES = 16 * 1024 * 1024;
+// Binary-searches a transcript for where today's lines begin and returns a line-aligned byte offset (0 when it cannot tell).
+// Lines are appended in time order, so everything before the returned offset is older than `midnight`.
+async function findTodayStart(fh, size, midnight) {
+  const WINDOW = 16 * 1024, STOP = 256 * 1024;
+  // Timestamp of the first complete line that starts after `off` and carries a timestamp, or null when the window holds none (for example one huge line).
+  const tsAfter = async (off) => {
+    const buf = Buffer.alloc(Math.min(WINDOW, size - off));
+    const { bytesRead } = await fh.read(buf, 0, buf.length, off);
+    const lines = buf.toString('utf8', 0, bytesRead).split('\n');
+    for (const l of lines.slice(1, -1)) {
+      const m = l.match(/"timestamp":"([^"]+)"/);
+      if (m) { const t = Date.parse(m[1]); if (Number.isFinite(t)) return t; }
+    }
+    return null;
+  };
+  let lo = 0, hi = size;
+  while (hi - lo > STOP) {
+    const mid = Math.floor((lo + hi) / 2);
+    const t = await tsAfter(mid);
+    if (t === null) break; // no information here, so keep what is already proven
+    if (t < midnight) lo = mid; else hi = mid;
+  }
+  if (lo === 0) return 0;
+  // Move forward to the start of the next line, because lo can fall in the middle of one.
+  for (let off = lo, scanned = 0; off < size && scanned < 16 * 1024 * 1024; off += 64 * 1024, scanned += 64 * 1024) {
+    const buf = Buffer.alloc(Math.min(64 * 1024, size - off));
+    const { bytesRead } = await fh.read(buf, 0, buf.length, off);
+    const nl = buf.subarray(0, bytesRead).indexOf(10);
+    if (nl >= 0) return off + nl + 1;
+  }
+  return 0;
+}
+
 async function doUpdateStats(file) {
   let st = statsState.get(file);
   const stat = await fsp.stat(file);
@@ -151,6 +187,7 @@ async function doUpdateStats(file) {
   const midnight = startOfToday();
   const fh = await fsp.open(file, 'r');
   try {
+    if (st.pos === 0 && stat.size > SEEK_MIN_BYTES) st.pos = await findTodayStart(fh, stat.size, midnight);
     while (st.pos < stat.size) {
       const len = Math.min(CHUNK, stat.size - st.pos);
       const buf = Buffer.alloc(len);
@@ -222,10 +259,29 @@ async function readSessionFiles() {
   return out;
 }
 
+// Subagents write to their own transcripts, so the parent's transcript never contains their usage.
+// Sum today's tokens over every subagent transcript, including finished ones, so the parent's totals and token rate include them.
+async function subagentStats(sub, names) {
+  const views = new Map(); // agent id -> {tokensToday, tokensPerMin}
+  const midnight = startOfToday();
+  for (const n of names) {
+    if (!n.endsWith('.jsonl')) continue;
+    const file = path.join(sub, n);
+    const stat = await fsp.stat(file).catch(() => null);
+    if (!stat || stat.mtimeMs < midnight) continue; // nothing written today
+    const v = statsView(await updateStats(file).catch(() => null));
+    views.set(n.replace(/\.jsonl$/, ''), v);
+  }
+  let tokensToday = 0, tokensPerMin = 0;
+  for (const v of views.values()) { tokensToday += v.tokensToday; tokensPerMin += v.tokensPerMin; }
+  return { views, tokensToday, tokensPerMin };
+}
+
 async function buildSubagents(parent, transcript) {
   const dir = transcript.replace(/\.jsonl$/, '');
   const sub = path.join(dir, 'subagents');
-  let names; try { names = await fsp.readdir(sub); } catch { return []; }
+  let names; try { names = await fsp.readdir(sub); } catch { return { items: [], tokensToday: 0, tokensPerMin: 0 }; }
+  const stats = await subagentStats(sub, names);
   const out = [];
   for (const n of names) {
     if (!n.endsWith('.meta.json')) continue;
@@ -241,11 +297,12 @@ async function buildSubagents(parent, transcript) {
         kind: 'subagent', sessionId: `${parent.sessionId}:${id}`, parentId: parent.sessionId, pid: parent.pid,
         name: meta.description || meta.agentType || id, cwd: parent.cwd, startedAt: meta.startedAt || stat.birthtimeMs,
         status: Date.now() - stat.mtimeMs < 20_000 ? 'busy' : 'idle', activity: sum.activity || '', ctxTokens: sum.ctxTokens || 0, model: sum.model || '',
-        failStreak: sum.failStreak || 0, lastPrompt: '', title: '', tokensToday: 0, workedMs: 0, tokensPerMin: 0,
+        failStreak: sum.failStreak || 0, lastPrompt: '', title: '', workedMs: 0,
+        tokensToday: stats.views.get(id)?.tokensToday || 0, tokensPerMin: stats.views.get(id)?.tokensPerMin || 0,
       });
     } catch { /* skipped */ }
   }
-  return out;
+  return { items: out, tokensToday: stats.tokensToday, tokensPerMin: stats.tokensPerMin };
 }
 
 async function buildTeammates(parents) {
@@ -299,7 +356,11 @@ async function collectSessions(force = false) {
       ...(stats || { tokensToday: 0, workedMs: 0, tokensPerMin: 0 }),
     };
     list.push(item); parents.set(s.sessionId, item);
-    if (tr) list.push(...(await buildSubagents(s, tr)));
+    if (tr) {
+      const sub = await buildSubagents(s, tr);
+      item.tokensToday += sub.tokensToday; item.tokensPerMin += sub.tokensPerMin;
+      list.push(...sub.items);
+    }
   }));
   list.push(...(await buildTeammates(parents)));
   list.sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
@@ -515,4 +576,4 @@ if (isMain) {
   }
 }
 
-export { parseLines, cut, stripTags, describeTool, summarize, updateStats, statsView, readUsage, collectSessions, forecastUrl, parseForecast, CITIES };
+export { parseLines, cut, stripTags, describeTool, summarize, updateStats, statsView, subagentStats, buildSubagents, findTodayStart, findTranscript, SEEK_MIN_BYTES, readUsage, collectSessions, forecastUrl, parseForecast, CITIES };
