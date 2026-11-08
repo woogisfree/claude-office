@@ -244,8 +244,12 @@ function drawText(t) {
 
 // ───────── Loop and size ─────────
 let last = 0, lastDraw = 0;
+// At most one animation frame is queued at a time, so restarting the loop never doubles it.
+let rafQueued = false;
+function queueLoop() { if (!rafQueued) { rafQueued = true; requestAnimationFrame((ms) => { rafQueued = false; loop(ms); }); } }
 function loop(ms) {
-  requestAnimationFrame(loop);
+  if (document.hidden) return; // the loop is restarted by the visibilitychange handler
+  queueLoop();
   if (ms - lastDraw < 31) return; // Draw at most 30 times per second.
   const dt = Math.min(0.1, (ms - (last || ms)) / 1000); last = ms; lastDraw = ms;
   let near = false;
