@@ -1,6 +1,6 @@
 {
   "name": "claude-office",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "A macOS menu bar app that shows your running Claude Code sessions as employees in a pixel-art office",
   "scripts": {
