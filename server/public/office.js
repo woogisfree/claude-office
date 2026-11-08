@@ -1,4 +1,4 @@
-// 테마별 방, 책상, 모니터, 의자, 서류 더미, 머그잔을 픽셀 단위로 그린다.
+// Draws the themed room, desks, monitors, chairs, paper stacks, and mugs pixel by pixel.
 const PAL = {
   office: { wall: '#f6e9cb', stripe: '#f0e0bd', rail: '#e9d4a2', wains: '#8fae8b', wainsHi: '#a9c7a2', base: '#6b5a44', fA: '#e2bd88', fB: '#d9b27c', seam: '#bf9560', rug: '#b9604a', rugHi: '#dc8f6b', rugEdge: '#f2dfb0', rugLine: '#9a4a38', desk: '#c68e5c', deskHi: '#e6b684', deskLo: '#93633d', rest: '#d9915a', restHi: '#f0b584', restLo: '#a9683c' },
   mine: { wall: '#4a3a2f', stripe: '#43342a', rail: '#6a5444', wains: '#33281f', wainsHi: '#46372b', base: '#1e1712', fA: '#5e4d3f', fB: '#564638', seam: '#3b2f26', rug: '#2e241d', rugHi: '#4a3b30', rugEdge: '#6a5444', rugLine: '#241b15', desk: '#7d7d86', deskHi: '#a4a4ae', deskLo: '#52525a', rest: '#7a5a3c', restHi: '#9a7650', restLo: '#58402a' },
@@ -7,7 +7,7 @@ const PAL = {
 const pal = () => PAL[theme] || PAL.office;
 const hh = (a, b) => hash(`${a},${b}`);
 
-// 둥근 모서리(모서리 한 칸을 비움)에 외곽선이 있는 상자
+// A box with rounded corners (one pixel cut from each corner) and an outline
 function pbox(x, y, w, h, fill, hi, lo) {
   rect(x + 1, y, w - 2, h, OUT); rect(x, y + 1, w, h - 2, OUT);
   rect(x + 1, y + 1, w - 2, h - 2, fill);
@@ -26,7 +26,7 @@ const spClawdS = () => cached('clawdS', () => compile(CLAWD_S, CLAWD_PAL));
 
 function drawRoom(t) {
   const p = pal();
-  // 벽: 세로 줄무늬 벽지, 허리 몰딩, 걸레받이
+  // Wall: vertical-stripe wallpaper, chair-rail molding, baseboard
   rect(0, 0, L.W, WALL_H, p.wall);
   for (let x = 0; x < L.W; x += 8) rect(x, 0, 2, WALL_H - 16, p.stripe);
   rect(0, WALL_H - 18, L.W, 2, p.rail);
@@ -34,20 +34,20 @@ function drawRoom(t) {
   for (let x = 4; x < L.W; x += 20) { rect(x, WALL_H - 13, 14, 9, p.wainsHi); rect(x + 1, WALL_H - 12, 12, 7, p.wains); }
   rect(0, WALL_H - 3, L.W, 3, p.base);
   if (theme === 'mine') for (let i = 0; i < 40; i++) { const rx = hh(i, 1) % L.W, ry = hh(i, 2) % (WALL_H - 20); rect(rx, ry, 3 + (i % 3), 2, p.wains); rect(rx, ry, 3 + (i % 3), 1, p.rail); }
-  // 바닥: 널마루, 같은 줄에서 판자 길이는 어긋나게 둔다.
+  // Floor: wooden planks, with plank lengths staggered within a row.
   rect(0, WALL_H, L.W, L.H - WALL_H, p.fA);
   for (let r = 0, y = WALL_H; y < L.H; y += 6, r++) {
     rect(0, y, L.W, 1, p.seam);
     for (let x = ((r * 23) % 40) - 40; x < L.W; x += 40) { rect(x, y, 1, 6, p.seam); if (hh(r, x) % 3 === 0) rect(x + 8 + (hh(r, x) % 20), y + 2, 4, 2, p.fB); }
     for (let k = 0; k < 3; k++) rect(hh(r, k) % L.W, y + 2 + (k % 3), 2, 1, p.fB);
   }
-  // 복도(첫 줄 뒤)와 통로에는 러그를 깐다.
-  // 복도와 세로 통로를 하나로 이어진 T자 러너 카펫으로 깐다. 바깥 외곽선, 크림색 테두리, 안쪽 바탕 순서로 겹쳐 그려서 이음매 없이 이어진다.
+  // Lay rugs in the corridor (behind the first row) and the aisle.
+  // The corridor and the vertical aisle form one T-shaped runner rug. It is drawn as outer outline, cream border, then inner fill, so there is no visible seam.
   const rugs = [[L.offX, WALL_H, L.cw, CORR_H], [L.aisleX - AISLE / 2 + 2, WALL_H, AISLE - 4, L.H - WALL_H]];
   for (const [rx, ry, rw, rh] of rugs) rect(rx - 1, ry - 1, rw + 2, rh + 2, OUT);
   for (const [rx, ry, rw, rh] of rugs) rect(rx, ry, rw, rh, p.rugEdge);
   for (const [rx, ry, rw, rh] of rugs) rect(rx + 2, ry + 2, rw - 4, rh - 4, p.rug);
-  // 안쪽 바탕에는 마름모 무늬를 전체 좌표 기준으로 그려서 두 카펫이 만나는 곳에서도 무늬가 끊기지 않는다.
+  // The inner diamond pattern uses global coordinates, so it stays continuous where the two rugs meet.
   for (const [rx, ry, rw, rh] of rugs) {
     for (let xx = rx + 3; xx < rx + rw - 3; xx++) for (let yy = ry + 3; yy < ry + rh - 3; yy++) {
       const mx = ((xx % 8) + 8) % 8, my = ((yy % 8) + 8) % 8;
@@ -55,16 +55,16 @@ function drawRoom(t) {
       else if (mx === 0 && my === 0) rect(xx, yy, 1, 1, p.rugHi);
     }
   }
-  // 테두리 안쪽에 얇은 줄을 한 번 더 둘러 카펫다운 마감을 준다.
+  // Add a thin inner line along the border for a rug-like finish.
   for (const [rx, ry, rw, rh] of rugs) { rect(rx + 2, ry + 2, rw - 4, 1, p.rugLine); rect(rx + 2, ry + rh - 3, rw - 4, 1, p.rugLine); }
-  // 통창과 벽 장식은 문 왼쪽 기준으로 시계, 화분, 창 순서로 놓는다. 열 수가 바뀌어도 함께 따라온다.
+  // The big window and wall decor are placed left of the door as clock, plant, window. They follow along when the column count changes.
   const doorL = L.doorX - 14;
   if (theme === 'office') drawShafts();
   L.win = { x: MARGIN + 2, y: 10, w: doorL - 58 - (MARGIN + 2), h: 36 };
   drawWindows(L.win.x, L.win.w, L.win.y, L.win.h, t);
   drawClock(doorL - 14, 22);
   if (theme !== 'xmas') ctx.drawImage(spPlant(), doorL - 52, WALL_H - 15);
-  if (theme === 'office' && L.leftCols >= 1) drawPets(t); // 왼쪽 묶음이 없으면 고양이 자리가 통로와 겹쳐 생략한다.
+  if (theme === 'office' && L.leftCols >= 1) drawPets(t); // Skipped when there is no left group, since the cat's spot would overlap the aisle.
   if (theme === 'mine') for (let x = L.offX + MARGIN + 30; x < L.offX + L.cw - 90; x += 70) { rect(x, 18, 4, 14, '#5a3e28'); rect(x - 1, 14, 6, 5, OUT); const f = Math.floor(t * 6 + x) % 3; rect(x, 9 - (f === 0 ? 1 : 0), 4, 6, '#ff9a2a'); rect(x + 1, 8 - (f === 1 ? 2 : 0), 2, 5, '#ffd24a'); }
   if (theme === 'xmas') {
     for (let x = 2, i = 0; x < L.W - 2; x += 5, i++) { rect(x, 3 + (i % 2), 1, 1, '#2a2a2a'); rect(x, 5 + (i % 2), 2, 2, ['#ffd24a', '#7ad07a', '#ff6a6a', '#6aaaff'][(i + Math.floor(t * 2)) % 4]); }
@@ -103,7 +103,7 @@ function drawMonitor(x, y, mode, t, seed) {
     }
     if (Math.floor(t * 2) % 2) rect(x + 18, y + 12, 2, 2, '#fff');
   } else if (mode === 'saver') {
-    // 쉬는 중에는 작은 로고가 화면 안을 튕기며 돌아다닌다.
+    // While resting, a small logo bounces around the screen.
     const bw = 10, bh = 6, px = Math.floor(t * 7 + seed) % (bw * 2), py = Math.floor(t * 5 + seed * 2) % (bh * 2);
     ctx.drawImage(spClawdS(), x + 3 + (px < bw ? px : bw * 2 - px), y + 3 + (py < bh ? py : bh * 2 - py));
   } else if (mode === 'desktop') {
@@ -125,7 +125,7 @@ function drawDocs(x, y, n) {
   for (let i = 0; i < n; i++) rect(x + (i % 3 === 1 ? 1 : 0), y - 1 - i, 8 + (i % 2), 1, i % 2 ? '#fbf8ee' : '#e4dec9');
   rect(x, y - n - 1, 9, 1, OUT);
 }
-// frac은 0~1 비율이다. 테마에 맞게 서류, 광석, 선물로 보여 준다.
+// frac is a ratio from 0 to 1. Shown as papers, ore, or gifts depending on the theme.
 function drawMeter(x, y, frac) {
   if (theme === 'mine') {
     pbox(x - 2, y - 7, 14, 8, '#5a5a66', '#7a7a88', '#3e3e48'); rect(x, y, 3, 2, OUT); rect(x + 7, y, 3, 2, OUT);
@@ -159,12 +159,12 @@ function drawDeskBlock(d, emp, t) {
     pbox(x + 28, y + 16, 14, 12, ['#d93a3a', '#3a8ad9', '#3ab070'][k], null, null); rect(x + 34, y + 16, 3, 12, '#fff6c8'); rect(x + 28, y + 21, 14, 2, '#fff6c8');
     rect(x + 45, y + 18, 8, 10, OUT); rect(x + 46, y + 19, 6, 8, '#e0b23a');
   }
-  // 책상 윗면, 앞면, 다리
+  // Desk top, front, and legs
   rect(x + 2, y + 28, 54, 7, OUT); rect(x + 3, y + 29, 52, 5, p.desk); rect(x + 3, y + 29, 52, 1, p.deskHi); rect(x + 3, y + 33, 52, 1, p.deskLo);
   rect(x + 3, y + 35, 52, 10, OUT); rect(x + 4, y + 35, 50, 9, p.desk); rect(x + 4, y + 43, 50, 1, p.deskLo);
   rect(x + 4, y + 45, 4, 3, OUT); rect(x + 50, y + 45, 4, 3, OUT);
-  if (theme === 'office') drawKeyboard(x + 3, y + 29); // 직원(x+11) 바로 앞
-  // 일하는 중에는 내려간 손 쪽 키 두 개가 노랗게 켜졌다 꺼지며 번갈아 눌리는 모습을 보여 준다. 손 모양(art.js)과 같은 typingLeft 박자를 쓴다.
+  if (theme === 'office') drawKeyboard(x + 3, y + 29); // right in front of the employee (x+11)
+  // While working, the two keys under the lowered hand light up yellow and go out, as if pressed alternately. Uses the same typingLeft beat as the hands (art.js).
   if (theme === 'office' && emp && st === 'busy') {
     const left = typingLeft(t, emp.hot, emp.seed);
     for (const kx of left ? [6, 8] : [14, 16]) rect(x + kx, y + 31, 1, 1, '#fff0a0');
@@ -191,7 +191,7 @@ function drawReclinerFront(d) {
   pbox(x + 3, y + 26, 18, 12, p.restHi, '#a3b4dc', p.rest); pbox(x + 3, y + 38, 18, 4, p.rest, p.restHi, p.restLo);
 }
 
-// 창으로 들어오는 햇살 줄기: 해의 위치에 따라 기울기가 바뀌고, 날씨가 흐리면 옅어진다.
+// Sunbeams coming through the window: the slope follows the sun's position and fades when the weather is cloudy.
 function drawShafts() {
   const hour = currentHour(), { day, f } = sunPos(hour), kind = weatherKind(curWeather());
   if (!day) return;
@@ -213,7 +213,7 @@ const CAT = ['.oo.........', 'obbooooooo..', 'obyybbbbbbbo', 'obbbbbbbbbbo', '.o
 const SOOT = ['.kkkk.', 'kkkkkk', 'kwkkwk', 'kkkkkk', '.kkkk.'];
 const spCat = () => cached('cat', () => compile(CAT, { o: '#1d1a24', b: '#3d3848', y: '#f4e08a' }));
 const spSoot = (blink) => cached('soot' + blink, () => compile(blink ? ['.kkkk.', 'kkkkkk', 'kkkkkk', 'kkkkkk', '.kkkk.'] : SOOT, { k: '#2a2630', w: '#ffffff' }));
-// 방석 위에서 자는 검은 고양이와 어슬렁거리는 먼지 정령
+// A black cat sleeping on a cushion and a dust sprite wandering around
 function drawPets(t) {
   const px = L.offX + MARGIN + 4, py = WALL_H + 3;
   pbox(px, py + 5, 17, 7, '#e48a8a', '#f2a8a8', '#b86464');
@@ -225,7 +225,7 @@ function drawPets(t) {
     ctx.drawImage(spSoot(Math.floor(t * 0.7 + i * 3) % 6 === 0), sx, sy);
   }
 }
-// 햇살 속에 떠다니는 먼지
+// Dust floating in the sunlight
 function drawMotes(t) {
   if (theme !== 'office') return;
   const hour = currentHour(), { day } = sunPos(hour), kind = weatherKind(curWeather());

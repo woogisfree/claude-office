@@ -1,4 +1,4 @@
-// 세션 카드, 사용량, 필터, 서버 폴링, 시작 코드.
+// Session cards, usage, filters, server polling, and startup code.
 const store = {
   get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
@@ -18,7 +18,7 @@ function ordered(list) {
   const pass = (s) => (fStatus === 'all' || s.status === fStatus) && (fProject === 'all' || projOf(s) === fProject);
   const rank = { waiting: 0, busy: 1, idle: 2 };
   parents.sort((a, b) => a.status === 'waiting' && b.status === 'waiting' ? a.statusUpdatedAt - b.statusUpdatedAt : (fStatus === 'all' ? rank[a.status] - rank[b.status] : 0) || a.startedAt - b.startedAt);
-  // 승인 대기는 맨 위에 오래 기다린 순서로 둔다.
+  // Sessions waiting for approval go on top, longest-waiting first.
   const out = [];
   for (const p of parents) if (pass(p)) { out.push({ s: p, child: false }); if (!collapsed.has(p.sessionId)) for (const c of kids(p.sessionId)) out.push({ s: c, child: true }); }
   return out;
@@ -45,7 +45,7 @@ function renderCards(list) {
   }
   html = html || `<div class="group">${list.length ? tr('noMatch') : tr('noSessions')}</div>`;
   if (box.dataset.sig !== html) { box.dataset.sig = html; box.innerHTML = html; box.scrollTop = prevScroll; onHover(hoverId); }
-  // 프로젝트 필터 목록
+  // Project filter list
   const sel = $('#fProject'), projects = [...new Set(list.filter((s) => !s.parentId).map(projOf))].sort();
   const want = ['all', ...projects].join('|');
   if (sel.dataset.sig !== want) {
@@ -74,7 +74,7 @@ $('#fProject').addEventListener('change', (e) => { fProject = e.target.value; st
 $('#panelBtn').addEventListener('click', () => { $('#panel').classList.toggle('folded'); resize(); });
 $('#helpBtn').addEventListener('click', showHelp);
 
-// 시간 막대
+// Time bar
 $('#hour').addEventListener('input', (e) => { hourOverride = Number(e.target.value); $('#hourText').textContent = `${Math.floor(hourOverride)}:${String(Math.round((hourOverride % 1) * 60)).padStart(2, '0')}`; });
 $('#hourReset').addEventListener('click', () => { hourOverride = null; $('#hourText').textContent = tr('hourReal'); });
 
@@ -91,7 +91,7 @@ async function pollSessions() {
 }
 let lastUsage = null;
 const fmtLeft = (sec) => fmtMin(Math.max(0, Math.round(sec / 60)));
-// 앱(Swift)이 claude.ai에서 가져온 사용량을 넘겨받는다. 응답 형식이 공개 규격이 아니라서 필드 이름을 느슨하게 해석한다.
+// Receive the usage the app (Swift) fetched from claude.ai. The response format is not a public spec, so field names are interpreted loosely.
 let appUsageAt = 0, appState = '';
 const toWindow = (o) => {
   if (!o || typeof o !== 'object') return null;
@@ -108,7 +108,7 @@ window.setAppUsage = (raw) => {
   lastUsage = { ok: true, fiveHour: f, weekly: w, updatedAt: Date.now() };
   renderUsage();
 };
-// 일시적인 실패(error)는 마지막 성공값을 그대로 두고 낡았다고 표시한다. 로그인이 풀린 경우(login)만 값을 지우고 로그인 안내를 보여 준다.
+// A temporary failure (error) keeps the last good value and marks it stale. Only a lost login (login) clears the value and shows the login prompt.
 window.setAppUsageState = (st) => { appState = st; if (st === 'login') lastUsage = null; renderUsage(); };
 const post = (m) => { try { window.webkit.messageHandlers.office.postMessage(m); } catch {} };
 
@@ -117,7 +117,7 @@ function emptyText() {
   if (appState === 'error') return [tr('fetchFail'), tr('fetchFailHint')];
   return [tr('noInfo'), tr('noInfoHint')];
 }
-// staleMs: 마지막 성공 뒤 지난 시간(밀리초). 0이 아니면 마지막으로 가져온 값을 흐리게 보여 준다.
+// staleMs: milliseconds since the last success. When nonzero, the last fetched value is shown dimmed.
 function renderMeter(el, w, name, staleMs = 0) {
   const txt = el.querySelector('.txt'), fill = el.querySelector('.bar i');
   el.classList.remove('mid', 'low', 'none', 'click', 'stale');
@@ -126,7 +126,7 @@ function renderMeter(el, w, name, staleMs = 0) {
   const used = expired ? 0 : Math.min(100, Math.max(0, w.pct)), left = Math.round(100 - used);
   fill.style.width = left + '%';
   el.classList.toggle('mid', left <= 50 && left > 20); el.classList.toggle('low', left <= 20);
-  const stale = staleMs > 0 && !expired; // 초기화 시각이 지났으면 값이 낡았어도 100%로 돌아온 것이 확실하다.
+  const stale = staleMs > 0 && !expired; // Once the reset time has passed, the window is certainly back to 100% even if the value is stale.
   const reset = expired ? tr('resetDone') : stale ? tr('asOf', fmtLeft(staleMs / 1000)) : w.resetsAt ? tr('resetsIn', fmtLeft(w.resetsAt - Date.now() / 1000)) : '';
   el.classList.toggle('stale', stale);
   txt.innerHTML = `<b>${left}%</b> ${tr('left')}${reset ? ` <span class="reset">· ${reset}</span>` : ''}`;
@@ -135,7 +135,7 @@ function renderMeter(el, w, name, staleMs = 0) {
 const STALE_GRACE_MS = 150000, STALE_LIMIT_MS = 6 * 3600 * 1000;
 function renderUsage() {
   let u = lastUsage;
-  // 가져오기에 실패한 상태에서 마지막 성공 뒤 2분 30초가 지나면 낡은 값으로 표시하고, 6시간이 지나면 값을 포기한다.
+  // While fetching keeps failing, show the value as stale 2 minutes 30 seconds after the last success, and give up on it after 6 hours.
   const age = u && appState === 'error' ? Date.now() - (u.updatedAt || 0) : 0;
   if (age > STALE_LIMIT_MS) u = null;
   const stale = age > STALE_GRACE_MS ? age : 0;
@@ -143,7 +143,7 @@ function renderUsage() {
   renderMeter($('#uw'), u && u.ok ? u.weekly : null, tr('nameW'), stale);
 }
 $('#usage').addEventListener('click', () => { if (appState === 'login') post('login'); });
-// 앱이 가져온 값이 최근이면 그것을 쓰고, 아니면 statusline이 쓴 파일을 읽는다.
+// Use the app's value if it is recent; otherwise read the file written by the statusline.
 async function pollUsage() {
   if (Date.now() - appUsageAt < 150000) return;
   try {
@@ -165,7 +165,7 @@ async function pollSun() {
   } catch {}
 }
 
-// 시작 코드
+// Startup code
 resize();
 pollSun(); pollSessions(); pollUsage();
 setInterval(pollSessions, 2000);

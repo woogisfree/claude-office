@@ -1,11 +1,11 @@
-// 서버의 순수 로직 테스트: node --test
+// Tests for the server's pure logic: node --test
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-// 서버를 불러오기 전에 임시 ~/.claude 를 지정하고, 날씨 조회는 수동 값으로 막는다.
+// Point at a temporary ~/.claude before importing the server, and block the weather lookup with manual values.
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-office-test-'));
 process.env.CLAUDE_OFFICE_CLAUDE_DIR = TMP;
 process.env.CLAUDE_OFFICE_SUN = '06:00,19:00';
@@ -15,24 +15,24 @@ test.after(() => fs.rmSync(TMP, { recursive: true, force: true }));
 const line = (o) => JSON.stringify(o);
 const writeTranscript = (name, rows) => { const f = path.join(TMP, name); fs.writeFileSync(f, rows.map(line).join('\n') + '\n'); return f; };
 
-test('parseLines: 잘린 줄은 무시하고 나머지는 읽는다', () => {
+test('parseLines: ignores truncated lines and reads the rest', () => {
   const rows = m.parseLines('{"a":1}\n{"b":\n\n{"c":3}\n');
   assert.deepEqual(rows, [{ a: 1 }, { c: 3 }]);
 });
 
-test('cut, stripTags: 길이를 줄이고 태그를 지운다', () => {
+test('cut, stripTags: shorten text and remove tags', () => {
   assert.equal(m.cut('abcdef', 4), 'abc…');
   assert.equal(m.cut('abc', 4), 'abc');
   assert.equal(m.stripTags('<b>안녕</b>   <i>세상</i>'), '안녕 세상');
 });
 
-test('describeTool: 파일은 이름만, 긴 명령은 60자로 줄인다', () => {
+test('describeTool: shows only the file name and cuts long commands to 60 characters', () => {
   assert.equal(m.describeTool('Read', { file_path: '/a/b/c.txt' }), 'Read c.txt');
   assert.equal(m.describeTool('Bash', { command: 'x'.repeat(100) }).length, 60);
   assert.equal(m.describeTool('Foo'), 'Foo');
 });
 
-test('summarize: 제목, 마지막 프롬프트, 지금 하는 일, 컨텍스트 크기', async () => {
+test('summarize: title, last prompt, current activity, and context size', async () => {
   const f = writeTranscript('s1.jsonl', [
     { type: 'ai-title', aiTitle: '테스트 세션' },
     { type: 'user', message: { role: 'user', content: '파일 읽어줘' } },
@@ -46,7 +46,7 @@ test('summarize: 제목, 마지막 프롬프트, 지금 하는 일, 컨텍스트
   assert.equal(s.model, 'claude-x');
 });
 
-test('summarize: 도구 실패는 연속으로 세고 사용자 거절은 세지 않으며 성공하면 0으로 돌아간다', async () => {
+test('summarize: counts consecutive tool failures, ignores user rejections, and resets to 0 on success', async () => {
   const res = (id, is_error, content) => ({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error, content }] } });
   const f = writeTranscript('s2.jsonl', [
     res('a', true, 'boom'), res('b', true, 'boom'),
@@ -57,7 +57,7 @@ test('summarize: 도구 실패는 연속으로 세고 사용자 거절은 세지
   assert.equal((await m.summarize(f2, 'sess-3')).failStreak, 0);
 });
 
-test('updateStats: 가중치 1.25, 0.1, 5를 적용하고 같은 메시지 id는 한 번만 센다', async () => {
+test('updateStats: applies the 1.25, 0.1, and 5 weights and counts each message id once', async () => {
   const now = new Date().toISOString();
   const yesterday = new Date(Date.now() - 36 * 3600_000).toISOString();
   const usage = { input_tokens: 100, cache_creation_input_tokens: 100, cache_read_input_tokens: 1000, output_tokens: 10 }; // 100 + 125 + 100 + 50
@@ -65,10 +65,10 @@ test('updateStats: 가중치 1.25, 0.1, 5를 적용하고 같은 메시지 id는
   const f = writeTranscript('stats.jsonl', [a('m1', now), a('m1', now), a('m0', yesterday)]);
   const view = m.statsView(await m.updateStats(f));
   assert.equal(view.tokensToday, 375);
-  assert.equal(view.tokensPerMin, 75); // 최근 5분 합계 375를 5로 나눈 값
+  assert.equal(view.tokensPerMin, 75); // the recent 5-minute total of 375 divided by 5
 });
 
-test('updateStats: 파일이 이어서 길어져도 이미 읽은 부분은 다시 세지 않는다', async () => {
+test('updateStats: does not recount already-read content when the file keeps growing', async () => {
   const now = new Date().toISOString();
   const row = (id) => ({ type: 'assistant', timestamp: now, message: { id, role: 'assistant', usage: { output_tokens: 10 }, content: [] } });
   const f = writeTranscript('grow.jsonl', [row('g1')]);
@@ -77,7 +77,7 @@ test('updateStats: 파일이 이어서 길어져도 이미 읽은 부분은 다�
   assert.equal(m.statsView(await m.updateStats(f)).tokensToday, 100);
 });
 
-test('readUsage: 상태 표시줄 캐시를 읽고, 빈 창은 null, 파일이 없으면 ok:false', async () => {
+test('readUsage: reads the status line cache, returns null for an empty window, and ok:false when the file is missing', async () => {
   const file = path.join(TMP, '.statusline-ratelimit-cache');
   assert.deepEqual(await m.readUsage(), { ok: false });
   fs.writeFileSync(file, '72|1794100000|87|1794500000\n');
@@ -91,13 +91,13 @@ test('readUsage: 상태 표시줄 캐시를 읽고, 빈 창은 null, 파일이 �
   assert.equal(u.weekly, null);
 });
 
-test('collectSessions: 세션 폴더가 없으면 missing으로 알린다', async () => {
+test('collectSessions: reports missing when the sessions folder does not exist', async () => {
   const r = await m.collectSessions(true);
   assert.equal(r.missing, true);
   assert.deepEqual(r.list, []);
 });
 
-test('forecastUrl, parseForecast: 도시 좌표로 조회하고 현지 일출·일몰과 UTC 오프셋을 읽는다', () => {
+test('forecastUrl, parseForecast: query by city coordinates and read local sunrise, sunset, and the UTC offset', () => {
   const url = new URL(m.forecastUrl(40.7128, -74.006));
   assert.equal(url.searchParams.get('latitude'), '40.7128');
   assert.equal(url.searchParams.get('longitude'), '-74.006');
@@ -109,7 +109,7 @@ test('forecastUrl, parseForecast: 도시 좌표로 조회하고 현지 일출·�
   assert.equal(g.utcOffset, null);
 });
 
-test('CITIES: 대표 도시 5곳이 있고 좌표가 올바른 범위에 있다', () => {
+test('CITIES: has the five cities and their coordinates are in range', () => {
   assert.deepEqual(Object.keys(m.CITIES), ['seoul', 'tokyo', 'newyork', 'london', 'sydney']);
   for (const [lat, lon] of Object.values(m.CITIES)) assert.ok(Math.abs(lat) <= 90 && Math.abs(lon) <= 180);
 });

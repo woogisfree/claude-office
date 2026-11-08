@@ -1,4 +1,4 @@
-// 직원 관리, 이동, 자동문, 그리기 루프. 픽셀은 저해상도 캔버스에, 글자는 고해상도 레이어에 그린다.
+// Employee management, movement, the automatic door, and the draw loop. Pixels go on a low-res canvas; text goes on a high-res layer.
 const wrap = $('#wrap');
 const emps = new Map();
 const deskOf = new Map();
@@ -19,7 +19,7 @@ function applySessions(list) {
   sessionList = list;
   const ids = new Set(list.map((s) => s.sessionId));
   for (const s of list) if (!deskOf.has(s.sessionId)) deskOf.set(s.sessionId, nextDesk());
-  // 하위 작업을 띄운 세션은 다른 세션이 쓰지 않는 파스텔 색을 하나 받는다.
+  // A session that spawned subtasks gets a pastel color that no other session uses.
   const parents = new Set(list.filter((s) => s.parentId).map((s) => s.parentId));
   for (const p of parents) if (!parentColors.has(p)) parentColors.set(p, PASTELS[parentColors.size % PASTELS.length]);
   for (const k of [...parentColors.keys()]) if (!parents.has(k)) parentColors.delete(k);
@@ -43,11 +43,11 @@ function applySessions(list) {
     if (!ids.has(e.id) && !e.leaving) {
       e.leaving = true; e.phase = 'leave';
       const d = deskPos(e.desk), s = seatPos(d);
-      // 자리에 닿기 전이면 지나온 길을 거꾸로 밟고, 자리에 있으면 통로로 나간다.
+      // Before reaching the seat, retrace the path already walked; at the seat, leave through the aisle.
       const trail = e.visited.slice().reverse();
       const out = [{ x: L.aisleX, y: L.corrY }, { x: L.doorX, y: L.corrY }, doorPos()];
-      // 자리에 있거나 쉬던 중이면 현재 x에서 아래 통로로 내려간 뒤 세로 통로로 이동한다. 어느 단계에서든 축을 따라서만 움직인다.
-      // 지금 걷는 경로의 끝에서 출발한다고 보고, 그곳이 리클라이너면 아래 통로로, 책상 자리면 왼쪽 옆길로 나간다.
+      // At the seat or the recliner, go down to the lower lane from the current x, then move to the vertical aisle. Movement always follows an axis.
+      // Treat the end of the current path as the starting point: leave through the lower lane from the recliner, or through the left side path from the desk seat.
       const last = e.path.length ? e.path[e.path.length - 1] : { x: e.x, y: e.y };
       e.leaveFromRest = last.x > d.x + 40;
       e.path = (e.visited.length && !e.seated ? trail : e.path.concat(exitRoute(d, s, e.leaveFromRest, last.x))).concat(out);
@@ -105,11 +105,11 @@ function renderEmployee(e, t) {
   if (resting) drawMug(Math.round(e.x) + 5, Math.round(e.y) - 7, idleMin > 15 ? 0 : 1, t);
 }
 
-// 카페인 폭주 중인 직원의 서류 더미에서 종이가 솟구쳤다가 흩날리며 떨어진다. 위치는 시간의 함수라서 따로 상태를 저장하지 않는다.
+// Papers burst off the stack of an employee in a caffeine rush and flutter down. Position is a function of time, so no extra state is stored.
 const PAPER_N = 8, PAPER_PERIOD = 1.5;
 const PAPER_BASE = ['ooooooo', 'owwwwwo', 'owllllo', 'owwwwwo', 'owlllwo', 'owwwwwo', 'owllllo', 'owwwwwo', 'ooooooo'];
 const PAPER_PAL = { o: 'rgba(75,52,48,.6)', w: '#fbf8ee', l: '#b9b29c' };
-// 종이를 15도씩 돌린 열두 가지 모양을 미리 만든다. 종이는 180도 대칭이라 이 정도면 한 바퀴를 모두 표현한다.
+// Pre-build twelve paper shapes rotated in 15-degree steps. A sheet is symmetric over 180 degrees, so this covers a full turn.
 const paperSpr = (k) => cached('paperRot' + k, () => {
   const c = document.createElement('canvas'); c.width = 13; c.height = 13;
   const g = c.getContext('2d'), a = k * 15 * Math.PI / 180, cs = Math.cos(a), sn = Math.sin(a);
@@ -122,15 +122,15 @@ const paperSpr = (k) => cached('paperRot' + k, () => {
   return c;
 });
 function drawPapers(d, e, t) {
-  const sx = d.x + 51, sy = d.y + 25; // 서류 더미 윗면
+  const sx = d.x + 51, sy = d.y + 25; // top of the paper stack
   for (let i = 0; i < PAPER_N; i++) {
     const ph = (t + e.seed * 0.37) / PAPER_PERIOD + i / PAPER_N;
-    const u = ((ph % 1) + 1) % 1, k = Math.floor(ph);                    // u: 한 장의 비행 진행도, k: 몇 번째 비행인지
-    const dir = (((k * 7 + i * 5 + e.seed) % 7) - 3) / 3;                  // -1 ~ 1: 비행마다 날아가는 방향이 달라진다
+    const u = ((ph % 1) + 1) % 1, k = Math.floor(ph);                    // u: progress of one sheet's flight, k: which flight it is
+    const dir = (((k * 7 + i * 5 + e.seed) % 7) - 3) / 3;                  // -1 to 1: each flight goes in a different direction
     const peak = 26 + ((k + i) % 3) * 5;
-    const x = sx + dir * 30 * u + Math.sin(u * 7 + i * 1.7) * 4;           // 좌우로 흔들리며 퍼진다
-    const y = sy - peak * 4 * u * (1 - u) * (1 - 0.3 * u) + 14 * u * u;    // 포물선으로 솟았다가 천천히 내려앉는다
-    const deg = t * 160 + i * 50 + u * 260;                                // 빙글빙글 돌면서 난다
+    const x = sx + dir * 30 * u + Math.sin(u * 7 + i * 1.7) * 4;           // sways left and right as it spreads
+    const y = sy - peak * 4 * u * (1 - u) * (1 - 0.3 * u) + 14 * u * u;    // rises in a parabola, then settles slowly
+    const deg = t * 160 + i * 50 + u * 260;                                // spins while flying
     ctx.globalAlpha = Math.max(0, Math.min(1, u / 0.08, (1 - u) / 0.2));
     ctx.drawImage(paperSpr(Math.floor((((deg % 180) + 180) % 180) / 15) % 12), Math.round(x - 6.5), Math.round(y - 6.5));
   }
@@ -155,7 +155,7 @@ function frame(t) {
   for (const e of emps.values()) {
     if (e.x === -100) continue;
     const d = deskPos(e.desk);
-    if (e.hot && e.phase === 'seated' && !e.walking && !e.leaving) items.push({ key: d.y + 41, fn: () => drawPapers(d, e, t) }); // 책상, 모니터, 리클라이너보다 앞
+    if (e.hot && e.phase === 'seated' && !e.walking && !e.leaving) items.push({ key: d.y + 41, fn: () => drawPapers(d, e, t) }); // in front of the desk, monitor, and recliner
     items.push({ key: e.walking || e.leaving ? e.y + 2 : e.phase === 'rest' ? d.y + 36 : d.y + 34.5, fn: () => renderEmployee(e, t) });
   }
   items.sort((a, b) => a.key - b.key).forEach((i) => i.fn());
@@ -164,7 +164,7 @@ function frame(t) {
   drawText(t);
 }
 
-// ───────── 글자 레이어: 이름표와 말풍선 ─────────
+// ───────── Text layer: name tags and speech bubbles ─────────
 const F = (w, px) => `${w} ${px}px ${FONT}`;
 function fitText(text, maxW) {
   if (tx.measureText(text).width <= maxW) return text;
@@ -173,7 +173,7 @@ function fitText(text, maxW) {
   return s + '…';
 }
 function rr(x, y, w, h, r) { tx.beginPath(); tx.roundRect(x, y, w, h, r); }
-// 그림자가 있는 둥근 카드. 픽셀 외곽선과 어울리도록 얇은 어두운 테두리를 두른다.
+// A rounded card with a shadow. A thin dark border matches the pixel outlines.
 function card(x, y, w, h, fill, r = 2.2) {
   tx.fillStyle = 'rgba(60,40,30,.28)'; rr(x, y + 0.9, w, h, r); tx.fill();
   tx.fillStyle = fill; rr(x, y, w, h, r); tx.fill();
@@ -181,7 +181,7 @@ function card(x, y, w, h, fill, r = 2.2) {
 }
 function bubble(x, topY, text, kind, blink) {
   const wait = kind === 'wait';
-  // 도구 이름(Bash, Write 등)은 강조색으로 따로 그린다.
+  // Tool names (Bash, Write, and so on) are drawn separately in an accent color.
   const m = !wait && text.match(/^([A-Z][A-Za-z_]+)(?:\s+(.*))?$/);
   const tool = m ? m[1] : '', rest = m ? (m[2] || '') : text;
   tx.textBaseline = 'middle';
@@ -190,7 +190,7 @@ function bubble(x, topY, text, kind, blink) {
   const dot = 6, w = Math.ceil(dot + tw + bw + 5), h = 10.5;
   const bx = Math.round(Math.min(Math.max(2, x - w / 2), L.W - w - 2)), by = Math.round(topY - h - 4);
   card(bx, by, w, h, wait ? '#ffeaa8' : '#ffffff');
-  // 꼬리
+  // tail
   const tx0 = Math.round(x);
   tx.fillStyle = wait ? '#ffeaa8' : '#ffffff'; tx.beginPath(); tx.moveTo(tx0 - 2, by + h - 0.3); tx.lineTo(tx0 + 2, by + h - 0.3); tx.lineTo(tx0, by + h + 2.2); tx.closePath(); tx.fill();
   tx.strokeStyle = 'rgba(75,52,48,.85)'; tx.lineWidth = 0.55; tx.beginPath(); tx.moveTo(tx0 - 2, by + h); tx.lineTo(tx0, by + h + 2.2); tx.lineTo(tx0 + 2, by + h); tx.stroke();
@@ -242,11 +242,11 @@ function drawText(t) {
   if (hoverId && emps.has(hoverId)) { const e = emps.get(hoverId); drawFullTag(e, deskPos(e.desk)); }
 }
 
-// ───────── 루프와 크기 ─────────
+// ───────── Loop and size ─────────
 let last = 0, lastDraw = 0;
 function loop(ms) {
   requestAnimationFrame(loop);
-  if (ms - lastDraw < 31) return; // 초당 30번까지만 그린다.
+  if (ms - lastDraw < 31) return; // Draw at most 30 times per second.
   const dt = Math.min(0.1, (ms - (last || ms)) / 1000); last = ms; lastDraw = ms;
   let near = false;
   for (const e of [...emps.values()]) { step(e, dt, ms); if (e.x !== -100 && (e.phase === 'enter' || e.leaving) && Math.hypot(e.x - L.doorX, e.y - L.corrY) < 40) near = true; }
@@ -261,18 +261,18 @@ function resize() {
   const cw = Math.round(L.W * L.zoom), ch = Math.round(L.H * L.zoom);
   wrap.style.width = cw + 'px'; wrap.style.height = ch + 'px';
   cv.style.width = cw + 'px'; cv.style.height = ch + 'px';
-  // 크기가 실제로 바뀔 때만 캔버스를 다시 지정한다. 지정하면 내용이 지워져 깜빡인다.
+  // Only reassign the canvas size when it really changes, because assigning clears the content and causes flicker.
   if (cv.width !== L.W || cv.height !== L.H) { cv.width = L.W; cv.height = L.H; }
   const dw = Math.round(cw * devicePixelRatio), dh = Math.round(ch * devicePixelRatio);
   if (tcv.width !== dw || tcv.height !== dh) { tcv.width = dw; tcv.height = dh; tcv.style.width = cw + 'px'; tcv.style.height = ch + 'px'; }
   const sig = `${L.leftCols}|${L.desks}|${L.zoom}|${L.offX}|${L.gx}|${L.rowPitch}`;
   if (sig !== layoutSig) {
     layoutSig = sig;
-    // 배치가 바뀌면 이동 중이던 경로의 좌표도 낡으므로, 걷던 직원은 도착지로 옮기고 퇴근하던 직원은 출발점에서 문까지 경로를 다시 잡는다. 낡은 좌표로 걸으면 대각선으로 가로지르게 된다.
+    // When the layout changes, the coordinates of paths in progress become stale, so walking employees jump to their destination and leaving employees get a new path from their starting point to the door. Walking on stale coordinates would cut diagonally.
     for (const e of [...emps.values()]) {
       if (e.x === -100) continue;
       if (e.leaving) {
-        // 퇴근하던 직원은 사라지지 않고, 새 배치의 출발점(자리 또는 리클라이너)에서 문까지 경로를 다시 짠다.
+        // A leaving employee does not vanish: plan a new path to the door from the start point (seat or recliner) of the new layout.
         const d = deskPos(e.desk), s = seatPos(d), p = e.leaveFromRest ? restPos(d) : s;
         e.x = p.x; e.y = p.y;
         e.path = exitRoute(d, s, e.leaveFromRest, p.x).concat([{ x: L.aisleX, y: L.corrY }, { x: L.doorX, y: L.corrY }, doorPos()]);
@@ -285,7 +285,7 @@ function resize() {
   frame(performance.now() / 1000);
 }
 window.addEventListener('resize', resize);
-// 전체화면 전환처럼 창 크기가 단계적으로 바뀔 때도 최종 크기에 맞추도록 화면 영역을 직접 감시한다.
+// Watch the stage element directly so the final size is applied even when the window size changes in steps, such as entering full screen.
 new ResizeObserver(() => resize()).observe(stage);
 
 function empAt(ev) {
@@ -293,7 +293,7 @@ function empAt(ev) {
   let best = null;
   for (const e of emps.values()) {
     if (e.leaving || e.x === -100) continue;
-    // 직원 본인과, 그 직원의 책상 구역(모니터, 책상, 리클라이너, 이름표 포함) 어디든 같은 대상으로 취급한다.
+    // Treat the employee and any part of their desk area (monitor, desk, recliner, name tag) as the same target.
     const onBody = Math.abs(x - e.x) < 8 && y > e.y - 23 && y < e.y + 2;
     const d = deskPos(e.desk);
     const onDesk = x >= d.x - GUTTER && x < d.x - GUTTER + CELL_W && y >= d.y && y < d.y + CELL_H;
@@ -307,5 +307,5 @@ tcv.addEventListener('click', (ev) => {
   const e = empAt(ev); if (!e) return;
   e.surprise = 1.2;
   const now = performance.now(); e.clickTimes = e.clickTimes.filter((x) => now - x < 1000); e.clickTimes.push(now);
-  if (e.clickTimes.length >= 10) { e.sulk = 5; e.clickTimes = []; e.surprise = 0; } // 이스터에그: 1초 안에 10번 누르면 5초 동안 토라진다.
+  if (e.clickTimes.length >= 10) { e.sulk = 5; e.clickTimes = []; e.surprise = 0; } // Easter egg: click 10 times within a second and the employee sulks for 5 seconds.
 });

@@ -1,4 +1,4 @@
-// Claude Office 로컬 서버: 의존성 없는 node:http 하나로 ~/.claude 를 읽어 세션 정보를 제공한다.
+// Claude Office local server: a dependency-free node:http server that reads ~/.claude and serves session info.
 import http from 'node:http';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(HERE, 'public');
-// 테스트나 다른 위치를 읽고 싶을 때 CLAUDE_OFFICE_CLAUDE_DIR 로 ~/.claude 위치를 바꿀 수 있다.
+// Set CLAUDE_OFFICE_CLAUDE_DIR to read a different location than ~/.claude (used by tests).
 const CLAUDE = process.env.CLAUDE_OFFICE_CLAUDE_DIR || path.join(os.homedir(), '.claude');
 const SESSIONS_DIR = path.join(CLAUDE, 'sessions');
 const PROJECTS_DIR = path.join(CLAUDE, 'projects');
@@ -24,7 +24,7 @@ const sh = (cmd, args, timeout = 4000) =>
     execFile(cmd, args, { timeout, maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => resolve(err ? '' : String(stdout))),
   );
 
-// ───────────────────────── 파일 읽기 도우미 ─────────────────────────
+// ───────────────────────── File reading helpers ─────────────────────────
 async function readTail(file, bytes = TAIL_BYTES) {
   const fh = await fsp.open(file, 'r');
   try {
@@ -43,12 +43,12 @@ const parseLines = (text) => {
   const out = [];
   for (const l of text.split('\n')) {
     if (!l) continue;
-    try { out.push(JSON.parse(l)); } catch { /* 잘린 줄은 무시 */ }
+    try { out.push(JSON.parse(l)); } catch { /* ignore truncated lines */ }
   }
   return out;
 };
 
-// ───────────────────────── 대화 기록 찾기 ─────────────────────────
+// ───────────────────────── Finding transcripts ─────────────────────────
 const transcriptCache = new Map(); // sessionId -> path
 let lastFullScan = 0;
 async function findTranscript(sessionId, cwd) {
@@ -64,11 +64,11 @@ async function findTranscript(sessionId, cwd) {
       const p = path.join(PROJECTS_DIR, d, `${sessionId}.jsonl`);
       if (fs.existsSync(p)) { transcriptCache.set(sessionId, p); return p; }
     }
-  } catch { /* 폴더 없음 */ }
+  } catch { /* folder missing */ }
   return null;
 }
 
-// ───────────────────────── 세션 요약 ─────────────────────────
+// ───────────────────────── Session summary ─────────────────────────
 const titleMemo = new Map();
 const cut = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 const stripTags = (s) => s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -126,7 +126,7 @@ async function summarize(file, sessionId) {
   return { title, lastPrompt, activity, ctxTokens, model, failStreak };
 }
 
-// ───────────────────────── 토큰 통계 ─────────────────────────
+// ───────────────────────── Token stats ─────────────────────────
 const statsState = new Map(); // file -> {pos, day, tokens, seen:Set, workMs, lastReq, lastEnd, events:[[ts,tokens]], touched}
 const statsLocks = new Map();
 const dayKey = (d = new Date()) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
@@ -163,7 +163,7 @@ async function doUpdateStats(file) {
       st.pos += len;
       for (const line of complete.split('\n')) {
         if (!line) continue;
-        // 오늘 이전의 줄은 JSON 파싱 없이 건너뛴다.
+        // Skip lines from before today without parsing the JSON.
         const m = line.match(/"timestamp":"([^"]+)"/);
         if (!m) continue;
         const ts = Date.parse(m[1]);
@@ -205,7 +205,7 @@ setInterval(() => {
   for (const [f, st] of statsState) if (Date.now() - st.touched > 60_000) statsState.delete(f);
 }, 30_000).unref();
 
-// ───────────────────────── 세션·서브에이전트·팀원 ─────────────────────────
+// ───────────────────────── Sessions, subagents, teammates ─────────────────────────
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
 
 async function readSessionFiles() {
@@ -217,7 +217,7 @@ async function readSessionFiles() {
     try {
       const j = JSON.parse(await fsp.readFile(path.join(SESSIONS_DIR, n), 'utf8'));
       if (j && j.pid && j.sessionId && alive(j.pid)) out.push(j);
-    } catch { /* 쓰는 중인 파일 */ }
+    } catch { /* file is being written */ }
   }
   return out;
 }
@@ -243,7 +243,7 @@ async function buildSubagents(parent, transcript) {
         status: Date.now() - stat.mtimeMs < 20_000 ? 'busy' : 'idle', activity: sum.activity || '', ctxTokens: sum.ctxTokens || 0, model: sum.model || '',
         failStreak: sum.failStreak || 0, lastPrompt: '', title: '', tokensToday: 0, workedMs: 0, tokensPerMin: 0,
       });
-    } catch { /* 건너뜀 */ }
+    } catch { /* skipped */ }
   }
   return out;
 }
@@ -262,7 +262,7 @@ async function buildTeammates(parents) {
       const cfg = JSON.parse(await fsp.readFile(path.join(TEAMS_DIR, team, 'config.json'), 'utf8'));
       const mem = (cfg.members || []).find((x) => x.agentId === agentId || x.name === agentId.split('@')[0]);
       if (mem && mem.isActive === false) active = false;
-    } catch { /* 설정 없음 */ }
+    } catch { /* no settings */ }
     const parent = parents.get(parentId);
     out.push({
       kind: 'teammate', sessionId: `team:${agentId}`, parentId, pid: Number(m[1]), name: agentId.split('@')[0], cwd: parent.cwd,
@@ -306,7 +306,7 @@ async function collectSessions(force = false) {
   return (sessionsCache = { at: Date.now(), value: { missing: false, list } }).value;
 }
 
-// ───────────────────────── 사용량 ─────────────────────────
+// ───────────────────────── Usage ─────────────────────────
 async function readUsage() {
   try {
     const [raw, st] = await Promise.all([fsp.readFile(USAGE_FILE, 'utf8'), fsp.stat(USAGE_FILE)]);
@@ -316,10 +316,10 @@ async function readUsage() {
   } catch { return { ok: false }; }
 }
 
-// ───────────────────────── 일출·일몰·날씨 ─────────────────────────
-// 창밖 날씨와 일출·일몰을 가져올 대표 도시다. 기본은 서울이고, 앱 메뉴에서 고른다.
+// ───────────────────────── Sunrise, sunset, weather ─────────────────────────
+// Cities used for the weather and sunrise/sunset outside the window. Seoul is the default; the app menu picks one.
 const CITIES = { seoul: [37.5665, 126.978], tokyo: [35.6762, 139.6503], newyork: [40.7128, -74.006], london: [51.5074, -0.1278], sydney: [-33.8688, 151.2093] };
-// timezone=auto 이면 Open-Meteo가 그 도시의 현지 시각으로 일출과 일몰을 돌려주고, UTC 오프셋(초)도 함께 준다.
+// With timezone=auto, Open-Meteo returns sunrise and sunset in the city's local time, plus the UTC offset in seconds.
 const forecastUrl = (lat, lon) => `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=sunrise,sunset&current=weather_code&timezone=auto&forecast_days=1`;
 function parseForecast(j) {
   const h = (iso) => { const [hh, mm] = iso.split('T')[1].split(':'); return +hh + +mm / 60; };
@@ -342,7 +342,7 @@ firstFetch = fetchSun();
 setInterval(fetchSun, 30 * 60_000).unref();
 const sunView = () => ({ sunrise: sun.sunrise, sunset: sun.sunset, manual: sun.manual, ok: sun.ok, fetchedAt: sun.fetchedAt, weather: sun.manual ? 0 : sun.weather, city: sun.city, utcOffset: sun.manual ? null : sun.utcOffset });
 
-// ───────────────────────── 창 전환 ─────────────────────────
+// ───────────────────────── Window focus ─────────────────────────
 async function psTable() {
   const out = await sh('ps', ['-axo', 'pid=,ppid=,tty=,comm=']);
   const map = new Map();
@@ -369,7 +369,7 @@ function outerApp(table, pid) {
   return app;
 }
 
-// Claude 데스크톱 앱의 세션 id 형식이다. 세션 파일의 hostSessionId가 이 형식이면 앱이 직접 그 세션 화면으로 이동할 수 있다.
+// Format of Claude desktop app session ids. If a session file's hostSessionId matches, the app can jump straight to that session.
 const DESKTOP_ID = /^local_[A-Za-z0-9-]{1,64}$/;
 async function focusSession(sessionId) {
   const { list } = await collectSessions(true);
@@ -377,7 +377,7 @@ async function focusSession(sessionId) {
   if (!s) return { app: null, tab: false };
   let target = s;
   if (s.kind === 'subagent') target = list.find((x) => x.sessionId === s.parentId) || s;
-  // 데스크톱 앱 세션: 앱이 처리하는 claude://code/continue 링크로 해당 세션 채팅을 연다. (공식 문서에는 없는 앱 내부 경로다.)
+  // Desktop app session: open its chat through the claude://code/continue link the app handles. (An internal app route that is not in the official docs.)
   if (target.entrypoint === 'claude-desktop' && DESKTOP_ID.test(target.hostSessionId || '')) {
     await sh('open', [`claude://code/continue?session=${encodeURIComponent(target.hostSessionId)}&source=claude_office`]);
     return { app: 'Claude', tab: true };
@@ -501,13 +501,18 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-// 직접 실행했을 때만 서버를 연다. 테스트가 이 파일을 불러올 때는 열지 않는다.
+// Only open the server when run directly, not when tests import this file.
 const isMain = process.argv[1] && fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
 if (isMain) {
   const PORT = process.env.PORT === undefined ? 4317 : Number(process.env.PORT);
   server.listen(PORT, '127.0.0.1', () => {
     console.log(`Claude Office: http://localhost:${server.address().port}`);
   });
+  // The app sets this so a crashed or force-quit app does not leave the server running.
+  if (process.env.CLAUDE_OFFICE_EXIT_WITH_PARENT === '1') {
+    const parent = process.ppid;
+    setInterval(() => { if (process.ppid !== parent) process.exit(0); }, 2000).unref?.();
+  }
 }
 
 export { parseLines, cut, stripTags, describeTool, summarize, updateStats, statsView, readUsage, collectSessions, forecastUrl, parseForecast, CITIES };

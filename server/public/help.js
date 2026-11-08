@@ -1,4 +1,4 @@
-// 화면 설명: 화면을 어둡게 덮고 각 부분에 번호를 붙인 뒤 설명을 아래쪽에 적는다.
+// Screen guide: dim the screen, number each part, and list the explanations at the bottom.
 const HELP_ITEMS = [
   ['#office', 'helpOffice'],
   ['#usage', 'helpUsage'],

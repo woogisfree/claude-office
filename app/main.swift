@@ -1,10 +1,10 @@
-// Claude Office 앱 셸: Node 서버 실행, WKWebView 창, 메뉴 막대, 알림, 설정(메뉴).
+// Claude Office app shell: launches the Node server and hosts the WKWebView window, menu bar item, notifications, and settings menu.
 import Cocoa
 import WebKit
 import UserNotifications
 import ServiceManagement
 
-// 시스템 언어가 한국어이면 한국어 문구를, 그 밖에는 영어 문구를 쓴다.
+// Use the Korean text when the system language is Korean, and the English text otherwise.
 let isKorean = (Locale.preferredLanguages.first ?? "en").hasPrefix("ko")
 func L(_ ko: String, _ en: String) -> String { isKorean ? ko : en }
 
@@ -26,7 +26,7 @@ struct Session: Decodable {
 struct Window5: Decodable { let pct: Double; let resetsAt: Double }
 struct Usage: Decodable { let ok: Bool; let fiveHour: Window5?; let weekly: Window5? }
 
-// 웹 화면 위에 올리는 투명한 드래그 전용 뷰. WKWebView는 안쪽 뷰가 마우스 이벤트를 먼저 받아 서브클래스로는 잡히지 않는다.
+// A transparent view placed over the web view just for dragging. WKWebView's inner views receive mouse events first, so a subclass cannot catch them.
 final class DragStrip: NSView {
     override var mouseDownCanMoveWindow: Bool { true }
     override func mouseDown(with event: NSEvent) {
@@ -34,8 +34,8 @@ final class DragStrip: NSView {
     }
 }
 
-// claude.ai에 로그인된 쿠키(WKWebsiteDataStore.default)로 사용량을 가져온다. 비밀번호는 앱이 다루지 않고, 로그인은 사용자가 claude.ai 화면에서 직접 한다.
-// 사용량 API는 공개 규격이 아니라서 응답 원문(JSON)을 그대로 화면으로 넘기고, 해석은 화면(panel.js)이 느슨하게 한다.
+// Fetches usage with the claude.ai login cookie (WKWebsiteDataStore.default). The app never handles the password; the user logs in on the claude.ai page.
+// The usage API is not a public spec, so the raw JSON response is passed straight to the UI, and panel.js interprets it loosely.
 final class UsageFetcher: NSObject, WKNavigationDelegate {
     let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 10, height: 10), configuration: WKWebViewConfiguration())
     private var ready = false, loading = false
@@ -53,7 +53,7 @@ final class UsageFetcher: NSObject, WKNavigationDelegate {
     private func fail(_ e: Error) { loading = false; ready = false; let p = pending; pending = []; p.forEach { $0(.failure(e)) } }
 
     private func run(_ done: @escaping (Result<String, Error>) -> Void) {
-        // 예외 대신 상태 코드가 담긴 JSON을 돌려준다. (예외로 던지면 Swift에서 일반 문구만 보여 원인을 알 수 없다.)
+        // Return JSON that carries the status code instead of throwing. (A thrown exception only shows a generic message in Swift, so the cause is lost.)
         let js = """
         const get = async (u) => { const r = await fetch(u, { credentials: 'include' }); const t = await r.text(); let j = null; try { j = JSON.parse(t); } catch (e) {} return { status: r.status, json: j }; };
         const why = (x) => (x.json && x.json.error && x.json.error.message) || '';
@@ -103,16 +103,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     var theme: String { d.string(forKey: "theme") ?? "office" }
     var zoom: String { d.string(forKey: "zoom") ?? "normal" }
-    // 창밖 날씨와 일출·일몰을 가져올 도시. 키는 server.mjs의 CITIES와 같아야 한다.
+    // City used for the weather and sunrise/sunset outside the window. The key must match CITIES in server.mjs.
     var city: String { d.string(forKey: "city") ?? "seoul" }
-    // 카페인 폭주 기준(분당 k 토큰)은 120으로 고정한다.
+    // The caffeine-rush threshold (thousands of tokens per minute) is fixed at 120.
     let threshold = 120
 
     func applicationDidFinishLaunching(_ n: Notification) {
         NSApp.setActivationPolicy(.regular)
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        // 메뉴 막대 아이콘: 앱 아이콘과 같은 색의 픽셀 마스코트. 32px 이미지를 16pt로 보여 줘서 고해상도 화면에서 또렷하다.
+        // Menu bar icon: a pixel mascot in the app icon's colors. A 32px image shown at 16pt stays crisp on Retina screens.
         if let path = Bundle.main.path(forResource: "StatusIcon", ofType: "png"), let img = NSImage(contentsOfFile: path) {
             img.size = NSSize(width: 16, height: 16)
             statusItem.button?.image = img
@@ -129,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let m = NSMenu(); m.addItem(withTitle: L("사무실 열기", "Open Office"), action: #selector(showWindow), keyEquivalent: ""); return m
     }
 
-    // MARK: 메뉴
+    // MARK: Menu
     func buildMenu() {
         let m = NSMenu()
         m.addItem(withTitle: L("사무실 열기", "Open Office"), action: #selector(showWindow), keyEquivalent: "o")
@@ -158,7 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         buildMenu()
     }
 
-    // MARK: 창
+    // MARK: Window
     func buildWindow() {
         let cfg = WKWebViewConfiguration()
         cfg.userContentController.add(self, name: "office")
@@ -166,7 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         web.navigationDelegate = self
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.titlebarAppearsTransparent = true; window.titleVisibility = .hidden
-        // 컨테이너 안에 웹 화면을 채우고, 헤더 왼쪽(오른쪽 컨트롤 영역 제외)에 드래그 뷰를 올린다.
+        // Fill the container with the web view and place the drag view over the left of the header (excluding the right-hand controls).
         let box = NSView(frame: NSRect(x: 0, y: 0, width: 1280, height: 860))
         web.frame = box.bounds; web.autoresizingMask = [.width, .height]; box.addSubview(web)
         let strip = DragStrip(frame: NSRect(x: 0, y: box.bounds.height - 44, width: box.bounds.width - 440, height: 44))
@@ -187,7 +187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
     func webView(_ w: WKWebView, didFinish n: WKNavigation!) { if baseURL != nil { pushSettings(); pushUsage() } }
 
-    // MARK: claude.ai 사용량 (로그인, 가져오기, 화면으로 전달)
+    // MARK: claude.ai usage (login, fetching, handing it to the UI)
     func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
         guard let body = m.body as? String else { return }
         if body == "login" { openLogin() } else if body.hasPrefix("log:") { writeLog(String(body.dropFirst(4))) }
@@ -198,7 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                 guard let self else { return }
                 switch r {
                 case .success(let json):
-                    // 응답 원문을 한 번 해석했다가 다시 직렬화해서, 화면에는 순수한 JSON만 넘긴다.
+                    // Parse the raw response once and serialize it again, so only clean JSON reaches the UI.
                     guard let data = json.data(using: .utf8), let obj = try? JSONSerialization.jsonObject(with: data),
                           let clean = try? JSONSerialization.data(withJSONObject: obj), let text = String(data: clean, encoding: .utf8) else { self.usageState = "error"; self.pushUsage(); return }
                     if let d = obj as? [String: Any], let f = d["five_hour"] as? [String: Any], let u = f["utilization"] as? Double { self.appFive = u }
@@ -233,7 +233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         w.title = L("claude.ai 로그인", "claude.ai Login"); w.contentView = wv; w.center(); w.isReleasedWhenClosed = false; w.delegate = self
         loginWin = w
         NSApp.activate(ignoringOtherApps: true); w.makeKeyAndOrderFront(nil)
-        // 로그인이 끝나면 사용량 요청이 성공하므로, 창이 열려 있는 동안 3초마다 시도하고 성공하면 창을 닫는다.
+        // Once login completes the usage request succeeds, so retry every 3 seconds while the window is open and close it on success.
         loginTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.refreshUsage(fromLogin: true) }
     }
     @objc func logoutClaude() {
@@ -249,7 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         if (n.object as? NSWindow) === loginWin { loginTimer?.invalidate(); loginTimer = nil; loginWin = nil }
     }
 
-    // MARK: Node 서버
+    // MARK: Node server
     func findNode() -> (String, String)? {
         let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/zsh")
         p.arguments = ["-lic", "command -v node; echo $PATH"]
@@ -267,7 +267,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         guard let res = Bundle.main.resourcePath else { return }
         let script = (res as NSString).appendingPathComponent("server/server.mjs")
         let p = Process(); p.executableURL = URL(fileURLWithPath: node); p.arguments = [script]
-        var env = ProcessInfo.processInfo.environment; env["PORT"] = "0"; env["PATH"] = path; env["CLAUDE_OFFICE_THEME"] = theme; p.environment = env
+        var env = ProcessInfo.processInfo.environment; env["PORT"] = "0"; env["PATH"] = path; env["CLAUDE_OFFICE_THEME"] = theme; env["CLAUDE_OFFICE_EXIT_WITH_PARENT"] = "1"; p.environment = env
         let out = Pipe(); p.standardOutput = out
         let err = Pipe(); p.standardError = err
         err.fileHandleForReading.readabilityHandler = { h in if let s = String(data: h.availableData, encoding: .utf8), !s.isEmpty { writeLog("server: \(s)") } }
@@ -290,7 +290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         usageTimer = Timer.scheduledTimer(withTimeInterval: 45, repeats: true) { [weak self] _ in self?.refreshUsage() }
     }
 
-    // MARK: 메뉴 막대와 알림
+    // MARK: Menu bar and notifications
     func tick() {
         guard let base = baseURL else { return }
         URLSession.shared.dataTask(with: base.appendingPathComponent("api/sessions")) { [weak self] data, _, _ in

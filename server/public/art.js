@@ -1,4 +1,4 @@
-// 픽셀 스프라이트: 문자열 지도로 그린 뒤 캔버스로 만들어 캐시한다. 직원은 머리, 몸통, 다리를 조합한다.
+// Pixel sprites: drawn as ASCII maps, compiled to cached canvases. Employees combine a head, torso, and legs.
 const OUT = '#4b3430';
 const shadeHex = (c, f) => { const [r, g, b] = hex(c); const k = (v) => Math.max(0, Math.min(255, Math.round(v * f))); return `rgb(${k(r)},${k(g)},${k(b)})`; };
 
@@ -29,7 +29,7 @@ const TORSO = {
   side: ['..occcccco..', '..occcccco..', '..osccccco..', '..osccccco..', '..osCCCCCo..', '..oppppppo..', '..oppppppo..'],
 };
 TORSO.back = TORSO.front.map((r) => r.replace(/s/g, 'c'));
-// 타이핑 중에는 몸통 옆 손을 ㅡ자(가로 2칸)로 바꿔 왼손과 오른손이 한 칸씩 번갈아 내려가게 한다. typeL은 왼손이 내려간 모습이다.
+// While typing, the hands at the torso's sides become flat 2-pixel bars that alternate down one step at a time. typeL is the left hand down.
 const TORSO_TYPE = (() => {
   const base = ['.occcccccco.', 'occcccccccco', 'occcccccccco', 'occcccccccco', 'occCCCCCCcco', '.oppppppppo.', '.oppppppppo.'];
   const make = (ly, ry) => { const rows = base.map((r) => r.split('')); [1, 2].forEach((x) => { rows[ly][x] = 's'; }); [9, 10].forEach((x) => { rows[ry][x] = 's'; }); return rows.map((r) => r.join('')); };
@@ -77,16 +77,16 @@ const spr = (kind, dir, name, lk, pal) => cached(`${kind}|${dir}|${name}|${lk.ha
 });
 const hatSpr = (name, pal) => cached('hat|' + name, () => compile(HATS[name], pal));
 
-// 타이핑 박자: true면 왼손이 내려간 순간이다. 손 모양(art.js)과 키 불빛(office.js)이 같은 함수를 써서 박자가 늘 맞는다.
-// 보통은 초당 5번, 폭주(fast)는 초당 9번 바꾸고, 박자가 조금씩 빨라졌다 느려지게 해서 기계가 아니라 사람이 치는 것처럼 보이게 한다.
-// seed로 직원마다 시작 시점을 달리해 모두가 똑같이 치지 않게 한다.
+// Typing rhythm: true means the left hand is down. The hands (art.js) and the key flash (office.js) share this function, so they always match.
+// Alternates 5 times per second normally and 9 times per second in a caffeine rush, with a slowly drifting beat so it looks like a person typing, not a machine.
+// The seed offsets each employee's start so they do not all type in unison.
 function typingLeft(t, fast, seed = 0) {
   const tt = t + seed * 0.31, hz = fast ? 9 : 5;
   const ph = Math.floor(tt * hz + 0.45 * Math.sin(tt * 2.3) + 0.3 * Math.sin(tt * 5.1));
   return ((ph % 2) + 2) % 2 === 0;
 }
 
-// 직원 하나를 그린다. (x, y)는 발 가운데 아래. 반환값은 머리 위쪽 y 좌표.
+// Draw one employee. (x, y) is the bottom center of the feet. Returns the y coordinate above the head.
 function drawChar(x, y, lk, o, t) {
   const dir = o.facing || 'front';
   const pal = lookPal(lk);
@@ -94,19 +94,19 @@ function drawChar(x, y, lk, o, t) {
   const step = o.walking ? Math.floor(t * 6) % 4 : -1;
   const legName = step < 0 ? 'idle' : step === 0 ? 'a' : step === 2 ? 'b' : 'idle';
   const bob = o.walking && step % 2 === 1 ? 1 : 0;
-  const jx = o.jitter && Math.floor(t * 7) % 2 ? 1 : 0; // 폭주 중에도 1px, 초당 약 3.5번만 살짝 흔든다.
-  const px = Math.round(x) - 6 + jx, py = Math.round(y) - 21 + bob + (o.sit ? 6 : 0); // 앉으면 몸이 의자 속으로 가라앉는다.
+  const jx = o.jitter && Math.floor(t * 7) % 2 ? 1 : 0; // Even in a rush, shake only 1px about 3.5 times per second.
+  const px = Math.round(x) - 6 + jx, py = Math.round(y) - 21 + bob + (o.sit ? 6 : 0); // When sitting, the body sinks into the chair.
   const flip = o.flip && dir === 'side';
   const put = (img, dx, dy) => {
     if (flip) { ctx.save(); ctx.translate(Math.round(x) * 2 + jx * 2, 0); ctx.scale(-1, 1); ctx.drawImage(img, px + dx, py + dy); ctx.restore(); }
     else ctx.drawImage(img, px + dx, py + dy);
   };
   const lSpr = spr('legs', dir, legName, lk, pal);
-  if (!o.sit) put(lSpr, 0, 16); // 앉은 자세에서는 다리가 쿠션 뒤에 가려진다.
+  if (!o.sit) put(lSpr, 0, 16); // When sitting, the legs are hidden behind the cushion.
   const typeFrame = o.typing && dir === 'front' ? (typingLeft(t, o.fast, o.seed) ? 'typeL' : 'typeR') : '';
   put(spr('torso', dir, typeFrame, lk, pal), 0, 9);
   put(spr('head', dir, '', lk, pal), 0, 0);
-  // 소품과 모자
+  // Props and hats
   const hat = o.hat || (lk.prop === 'cap' || lk.prop === 'beanie' ? lk.prop : null);
   if (hat) put(hatSpr(hat, pal), 0, 0);
   if (!o.hat) {
@@ -119,5 +119,5 @@ function drawChar(x, y, lk, o, t) {
   if (o.hand) put(cached('armup|' + lk.shirt, () => compile(ARM_UP, pal)), 11, 3 - 1);
   if (o.sweat) { const d = Math.floor(t * 4) % 5; ctx.fillStyle = '#7fd0ff'; ctx.fillRect(px + 10, py + 3 + d, 1, 2); }
   if (o.fire) { for (let i = 0; i < 3; i++) { ctx.fillStyle = ['#ff5a2a', '#ff9a2a', '#ffd24a'][i]; ctx.fillRect(px + 1 + i * 4, py - 2 - ((Math.floor(t * 10) + i) % 3), 2, 3 - (i % 2)); } }
-  return py; // 머리 위쪽
+  return py; // top of the head
 }
