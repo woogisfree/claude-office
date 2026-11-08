@@ -77,6 +77,15 @@ const spr = (kind, dir, name, lk, pal) => cached(`${kind}|${dir}|${name}|${lk.ha
 });
 const hatSpr = (name, pal) => cached('hat|' + name, () => compile(HATS[name], pal));
 
+// 타이핑 박자: true면 왼손이 내려간 순간이다. 손 모양(art.js)과 키 불빛(office.js)이 같은 함수를 써서 박자가 늘 맞는다.
+// 보통은 초당 5번, 폭주(fast)는 초당 9번 바꾸고, 박자가 조금씩 빨라졌다 느려지게 해서 기계가 아니라 사람이 치는 것처럼 보이게 한다.
+// seed로 직원마다 시작 시점을 달리해 모두가 똑같이 치지 않게 한다.
+function typingLeft(t, fast, seed = 0) {
+  const tt = t + seed * 0.31, hz = fast ? 9 : 5;
+  const ph = Math.floor(tt * hz + 0.45 * Math.sin(tt * 2.3) + 0.3 * Math.sin(tt * 5.1));
+  return ((ph % 2) + 2) % 2 === 0;
+}
+
 // 직원 하나를 그린다. (x, y)는 발 가운데 아래. 반환값은 머리 위쪽 y 좌표.
 function drawChar(x, y, lk, o, t) {
   const dir = o.facing || 'front';
@@ -94,7 +103,7 @@ function drawChar(x, y, lk, o, t) {
   };
   const lSpr = spr('legs', dir, legName, lk, pal);
   if (!o.sit) put(lSpr, 0, 16); // 앉은 자세에서는 다리가 쿠션 뒤에 가려진다.
-  const typeFrame = o.typing && dir === 'front' ? (Math.floor(t * (o.fast ? 16 : 8)) % 2 === 0 ? 'typeL' : 'typeR') : '';
+  const typeFrame = o.typing && dir === 'front' ? (typingLeft(t, o.fast, o.seed) ? 'typeL' : 'typeR') : '';
   put(spr('torso', dir, typeFrame, lk, pal), 0, 9);
   put(spr('head', dir, '', lk, pal), 0, 0);
   // 소품과 모자

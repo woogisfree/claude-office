@@ -113,7 +113,7 @@ function renderEmployee(e, t) {
   const surprised = e.surprise > 0;
   const o = {
     facing: e.walking ? e.face : e.sulk > 0 ? 'back' : 'front', flip: e.flip, walking: e.walking, sit: resting,
-    typing: atDesk && st === 'busy', fast: e.hot, hand: atDesk && st === 'waiting', jitter: e.hot && atDesk,
+    typing: atDesk && st === 'busy', fast: e.hot, seed: e.seed, hand: atDesk && st === 'waiting', jitter: e.hot && atDesk,
     wide: e.hot || surprised, sleepy: resting && idleMin > 15, sweat: atDesk && st === 'busy' && e.data.failStreak >= 3,
     fire: theme === 'mine' && e.hot && atDesk,
     hat: theme === 'xmas' ? 'xmas' : theme === 'mine' ? 'miner' : party(e) ? 'party' : null,
