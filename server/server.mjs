@@ -80,6 +80,11 @@ function describeTool(name, input = {}) {
   return cut(t ? `${name} ${t}` : name, 60);
 }
 
+// Context window of a model: 200k for older models (Claude 3, Haiku 4.5, Sonnet 4 and 4.5, Opus 4, 4.1 and 4.5), 1M for newer ones.
+// A session that already holds more than 200k tokens must be on the 1M window, whatever the model name says.
+const SMALL_WINDOW_MODEL = /claude-(3-|haiku-4-5|sonnet-4(?!-[6-9])|opus-4(?!-[6-9]))/;
+function contextLimit(model, ctxTokens = 0) { return ctxTokens > 200000 || !SMALL_WINDOW_MODEL.test(model || '') ? 1e6 : 2e5; }
+
 async function summarize(file, sessionId) {
   const { text } = await readTail(file);
   const rows = parseLines(text);
@@ -89,7 +94,6 @@ async function summarize(file, sessionId) {
   let ctxTokens = 0;
   let model = '';
   let failStreak = 0;
-  const pending = new Map(); // tool_use id -> name
 
   for (const r of rows) {
     if (r.type === 'ai-title' && (r.aiTitle || r.title)) title = r.aiTitle || r.title;
@@ -103,7 +107,6 @@ async function summarize(file, sessionId) {
         for (const b of c) {
           if (b.type === 'text' && !r.isMeta) { lastPrompt = cut(stripTags(b.text), 140); failStreak = 0; }
           if (b.type === 'tool_result') {
-            pending.delete(b.tool_use_id);
             const txt = typeof b.content === 'string' ? b.content : JSON.stringify(b.content || '');
             const rejected = /user (doesn't want|rejected)|interrupted|request interrupted/i.test(txt);
             if (b.is_error && !rejected) failStreak++;
@@ -117,7 +120,7 @@ async function summarize(file, sessionId) {
       const u = msg.usage;
       if (u) ctxTokens = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.output_tokens || 0);
       for (const b of msg.content || []) {
-        if (b.type === 'tool_use') { pending.set(b.id, b.name); activity = describeTool(b.name, b.input); }
+        if (b.type === 'tool_use') activity = describeTool(b.name, b.input);
         else if (b.type === 'thinking') activity = '@thinking';
         else if (b.type === 'text') activity = '@writing';
       }
@@ -245,6 +248,25 @@ setInterval(() => {
 // ───────────────────────── Sessions, subagents, teammates ─────────────────────────
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
 
+// A session file records when its process started (procStart, written in UTC). If the process now running under that pid started at
+// another time, the pid was reused after the session ended without cleaning up its file, so the session is not alive.
+// Local time (how ps prints it) and UTC are both accepted, and anything unreadable counts as a match, so a real session is never hidden by mistake.
+function isSameProcess(procStart, psStart) {
+  if (!procStart || !psStart) return true;
+  const norm = (x) => String(x).replace(/\s+/g, ' ').trim();
+  const actual = Date.parse(norm(psStart));
+  const recorded = [Date.parse(norm(procStart)), Date.parse(norm(procStart) + ' UTC')];
+  if (!Number.isFinite(actual) || recorded.some((t) => !Number.isFinite(t))) return true;
+  return recorded.some((t) => Math.abs(t - actual) <= 5000);
+}
+const verifiedPid = new Map(); // `${sessionId}:${pid}` -> boolean, checked once because a running process keeps its start time
+async function processStarts(pids) {
+  const map = new Map();
+  const out = await sh('ps', ['-o', 'pid=,lstart=', '-p', pids.join(',')]);
+  for (const l of out.split('\n')) { const m = l.match(/^\s*(\d+)\s+(.*)$/); if (m) map.set(Number(m[1]), m[2]); }
+  return map;
+}
+
 async function readSessionFiles() {
   let names;
   try { names = await fsp.readdir(SESSIONS_DIR); } catch { return null; }
@@ -256,7 +278,12 @@ async function readSessionFiles() {
       if (j && j.pid && j.sessionId && alive(j.pid)) out.push(j);
     } catch { /* file is being written */ }
   }
-  return out;
+  const unchecked = out.filter((j) => j.procStart && !verifiedPid.has(`${j.sessionId}:${j.pid}`));
+  if (unchecked.length) {
+    const starts = await processStarts(unchecked.map((j) => j.pid));
+    for (const j of unchecked) verifiedPid.set(`${j.sessionId}:${j.pid}`, isSameProcess(j.procStart, starts.get(j.pid)));
+  }
+  return out.filter((j) => verifiedPid.get(`${j.sessionId}:${j.pid}`) !== false);
 }
 
 // Subagents write to their own transcripts, so the parent's transcript never contains their usage.
@@ -296,7 +323,7 @@ async function buildSubagents(parent, transcript) {
       out.push({
         kind: 'subagent', sessionId: `${parent.sessionId}:${id}`, parentId: parent.sessionId, pid: parent.pid,
         name: meta.description || meta.agentType || id, cwd: parent.cwd, startedAt: meta.startedAt || stat.birthtimeMs,
-        status: Date.now() - stat.mtimeMs < 20_000 ? 'busy' : 'idle', activity: sum.activity || '', ctxTokens: sum.ctxTokens || 0, model: sum.model || '',
+        status: Date.now() - stat.mtimeMs < 20_000 ? 'busy' : 'idle', activity: sum.activity || '', ctxTokens: sum.ctxTokens || 0, ctxLimit: contextLimit(sum.model, sum.ctxTokens), model: sum.model || '',
         failStreak: sum.failStreak || 0, lastPrompt: '', title: '', workedMs: 0,
         tokensToday: stats.views.get(id)?.tokensToday || 0, tokensPerMin: stats.views.get(id)?.tokensPerMin || 0,
       });
@@ -352,7 +379,7 @@ async function collectSessions(force = false) {
       title: sum.title || '', lastPrompt: sum.lastPrompt || '',
       status: waiting ? 'waiting' : s.status === 'busy' ? 'busy' : 'idle',
       waitingFor: s.waitingFor || '', statusUpdatedAt: s.statusUpdatedAt || 0,
-      activity: sum.activity || '', ctxTokens: sum.ctxTokens || 0, model: sum.model || '', failStreak: sum.failStreak || 0,
+      activity: sum.activity || '', ctxTokens: sum.ctxTokens || 0, ctxLimit: contextLimit(sum.model, sum.ctxTokens), model: sum.model || '', failStreak: sum.failStreak || 0,
       ...(stats || { tokensToday: 0, workedMs: 0, tokensPerMin: 0 }),
     };
     list.push(item); parents.set(s.sessionId, item);
@@ -576,4 +603,4 @@ if (isMain) {
   }
 }
 
-export { parseLines, cut, stripTags, describeTool, summarize, updateStats, statsView, subagentStats, buildSubagents, findTodayStart, findTranscript, SEEK_MIN_BYTES, readUsage, collectSessions, forecastUrl, parseForecast, CITIES };
+export { contextLimit, parseLines, cut, stripTags, describeTool, summarize, updateStats, statsView, subagentStats, buildSubagents, findTodayStart, findTranscript, isSameProcess, SEEK_MIN_BYTES, readUsage, collectSessions, forecastUrl, parseForecast, CITIES };
