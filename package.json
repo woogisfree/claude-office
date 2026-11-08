@@ -1,6 +1,6 @@
 {
   "name": "claude-office",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Claude Code 세션을 픽셀아트 사무실의 직원으로 보여 주는 macOS 메뉴 막대 앱",
   "scripts": {
