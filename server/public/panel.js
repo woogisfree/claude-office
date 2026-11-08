@@ -168,8 +168,17 @@ async function pollSun() {
 // Startup code
 resize();
 pollSun(); pollSessions(); pollUsage();
-setInterval(pollSessions, 2000);
-setInterval(pollUsage, 5000);
-setInterval(renderUsage, 30000);
-setInterval(pollSun, 60000);
-requestAnimationFrame(loop);
+// Nothing is drawn or polled while the window is hidden (minimized, on another desktop, or covered), and everything is refreshed at once when it returns.
+const whenVisible = (fn) => () => { if (!document.hidden) fn(); };
+setInterval(whenVisible(pollSessions), 2000);
+setInterval(whenVisible(pollUsage), 5000);
+setInterval(whenVisible(renderUsage), 30000);
+setInterval(whenVisible(pollSun), 60000);
+document.addEventListener('visibilitychange', () => {
+  post('log:window ' + document.visibilityState);
+  if (document.hidden) return;
+  pollSessions(); pollUsage(); renderUsage(); pollSun();
+  last = 0; // the time spent hidden must not become one huge animation step
+  queueLoop();
+});
+queueLoop();
