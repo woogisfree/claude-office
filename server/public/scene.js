@@ -3,8 +3,13 @@ const wrap = $('#wrap');
 const emps = new Map();
 const deskOf = new Map();
 let sessionList = [];
+// The session under the pointer or the keyboard focus. Change it only through setHover, which tells the session cards (panel.js)
+// with an "office:hover" event, so the two files no longer depend on each other's load order.
 let hoverId = null;
-let onHover = () => {};
+function setHover(id, notify = true) {
+  hoverId = id;
+  if (notify) document.dispatchEvent(new CustomEvent('office:hover', { detail: id }));
+}
 const door = { open: 0, idleFor: 0 };
 const PASTELS = ['#f8b4b4', '#b4d8f8', '#b8f0c0', '#f8e0a0', '#d8c0f8', '#f8c8e8', '#a8ecec', '#ffd0a0'];
 const parentColors = new Map();
@@ -305,8 +310,8 @@ function empAt(ev) {
   }
   return best;
 }
-tcv.addEventListener('mousemove', (ev) => { const e = empAt(ev), id = e ? e.id : null; if (id !== hoverId) { hoverId = id; onHover(id); } tcv.style.cursor = e ? 'pointer' : 'default'; });
-tcv.addEventListener('mouseleave', () => { hoverId = null; onHover(null); });
+tcv.addEventListener('mousemove', (ev) => { const e = empAt(ev), id = e ? e.id : null; if (id !== hoverId) setHover(id); tcv.style.cursor = e ? 'pointer' : 'default'; });
+tcv.addEventListener('mouseleave', () => setHover(null));
 tcv.addEventListener('click', (ev) => {
   const e = empAt(ev); if (!e) return;
   e.surprise = 1.2;

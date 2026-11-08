@@ -52,7 +52,7 @@ function renderCards(list) {
     // Replacing the cards would drop the keyboard focus, so remember what had it and focus the same control again.
     const had = document.activeElement && box.contains(document.activeElement) ? document.activeElement : null;
     const keep = had ? { id: had.closest('.card')?.dataset.id, fold: had.matches('[data-fold]') } : null;
-    box.dataset.sig = html; box.innerHTML = html; box.scrollTop = prevScroll; onHover(hoverId);
+    box.dataset.sig = html; box.innerHTML = html; box.scrollTop = prevScroll; highlightCard(hoverId);
     if (keep && keep.id) {
       const card = box.querySelector(`.card[data-id="${CSS.escape(keep.id)}"]`);
       const target = card && (keep.fold ? card.querySelector('[data-fold]') : card.querySelector('.main'));
@@ -86,16 +86,18 @@ function jumpToSession(id) {
 $('#cards').addEventListener('keydown', (ev) => {
   if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.classList.contains('main')) { ev.preventDefault(); jumpToSession(ev.target.closest('.card').dataset.id); }
 });
-$('#cards').addEventListener('focusin', (ev) => { const c = ev.target.closest('.card'); if (c) { hoverId = c.dataset.id; onHover(hoverId); } });
-$('#cards').addEventListener('focusout', () => { hoverId = null; onHover(null); });
-$('#cards').addEventListener('mouseover', (ev) => { const c = ev.target.closest('.card'); hoverId = c ? c.dataset.id : null; });
-$('#cards').addEventListener('mouseleave', () => { hoverId = null; });
-onHover = (id) => {
+$('#cards').addEventListener('focusin', (ev) => { const c = ev.target.closest('.card'); if (c) setHover(c.dataset.id); });
+$('#cards').addEventListener('focusout', () => setHover(null));
+// With the mouse the card is already under the pointer, so only the office needs to know (no highlight or scrolling of the cards).
+$('#cards').addEventListener('mouseover', (ev) => { const c = ev.target.closest('.card'); setHover(c ? c.dataset.id : null, false); });
+$('#cards').addEventListener('mouseleave', () => setHover(null, false));
+document.addEventListener('office:hover', (ev) => highlightCard(ev.detail));
+function highlightCard(id) {
   document.querySelectorAll('.card.hl').forEach((c) => c.classList.remove('hl'));
   if (!id) return;
   const c = document.querySelector(`.card[data-id="${CSS.escape(id)}"]`);
   if (c) { c.classList.add('hl'); c.scrollIntoView({ block: 'nearest' }); }
-};
+}
 $('#fStatus').addEventListener('change', (e) => { fStatus = e.target.value; store.set('office.fStatus', fStatus); renderCards(sessionList); });
 $('#fProject').addEventListener('change', (e) => { fProject = e.target.value; store.set('office.fProject', fProject); renderCards(sessionList); });
 $('#panelBtn').addEventListener('click', () => { $('#panel').classList.toggle('folded'); resize(); });
