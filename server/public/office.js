@@ -24,7 +24,21 @@ const CLAWD_PAL = { d: '#e07a55', e: '#1a0f0a' };
 const CLAWD_S = ['.dddddd.', '.dedded.', 'dddddddd', '.dddddd.', '.d.dd.d.'];
 const spClawdS = () => cached('clawdS', () => compile(CLAWD_S, CLAWD_PAL));
 
-function drawRoom(t) {
+// The wall, floor, and rugs never animate, so they are painted once and copied from a cached canvas on later frames.
+// The cache is rebuilt when the theme or the size of the room changes. Painting happens on the main canvas first, then the result is copied.
+let roomCache = { key: '', canvas: null };
+function drawRoomBase() {
+  const key = [theme, L.W, L.H, L.offX, L.cw, L.aisleX].join('|');
+  if (roomCache.canvas && roomCache.key === key) { ctx.drawImage(roomCache.canvas, 0, 0); return; }
+  paintRoomBase();
+  if (cv.width !== L.W || cv.height !== L.H) { roomCache = { key: '', canvas: null }; return; } // the canvas is not resized yet, so nothing is safe to keep
+  const c = roomCache.canvas || document.createElement('canvas');
+  c.width = L.W; c.height = L.H;
+  c.getContext('2d').drawImage(cv, 0, 0);
+  roomCache = { key, canvas: c };
+}
+
+function paintRoomBase() {
   const p = pal();
   // Wall: vertical-stripe wallpaper, chair-rail molding, baseboard
   rect(0, 0, L.W, WALL_H, p.wall);
@@ -57,6 +71,11 @@ function drawRoom(t) {
   }
   // Add a thin inner line along the border for a rug-like finish.
   for (const [rx, ry, rw, rh] of rugs) { rect(rx + 2, ry + 2, rw - 4, 1, p.rugLine); rect(rx + 2, ry + rh - 3, rw - 4, 1, p.rugLine); }
+}
+
+function drawRoom(t) {
+  const p = pal();
+  drawRoomBase();
   // The big window and wall decor are placed left of the door as clock, plant, window. They follow along when the column count changes.
   const doorL = L.doorX - 14;
   if (theme === 'office') drawShafts();

@@ -3,9 +3,14 @@ import fsp from 'node:fs/promises';
 import { CHUNK } from './config.mjs';
 
 // ───────────────────────── Token stats ─────────────────────────
-const statsState = new Map(); // file -> {pos, day, tokens, seen:Set, workMs, lastReq, lastEnd, events:[[ts,tokens]], touched}
+// file -> {pos, day, tokens, seen:Set, workMs, lastReq, lastEnd, events:[[ts,weighted]], touched}
+// tokens is the plain count shown to the user. events hold weighted values, which only the token rate (caffeine rush) uses.
+const statsState = new Map();
 const statsLocks = new Map();
 const dayKey = (d = new Date()) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+// Counts each kind of token by roughly what it costs to process: cache writes 1.25x, cache reads 0.1x, and output 5x the plain input.
+// A plain sum would be dominated by cache reads, which are cheap, so the rate that decides the caffeine rush uses this value instead.
+export const weightedTokens = (u) => (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) * 1.25 + (u.cache_read_input_tokens || 0) * 0.1 + (u.output_tokens || 0) * 5;
 export const startOfToday = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
 
 export async function updateStats(file) {
@@ -94,9 +99,9 @@ async function doUpdateStats(file) {
           const u = msg.usage;
           if (u && msg.id && !st.seen.has(msg.id)) {
             st.seen.add(msg.id);
-            const t = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) * 1.25 + (u.cache_read_input_tokens || 0) * 0.1 + (u.output_tokens || 0) * 5;
-            st.tokens += t;
-            st.events.push([ts, t]);
+            const input = u.input_tokens || 0, output = u.output_tokens || 0;
+            st.tokens += input + output;
+            st.events.push([ts, weightedTokens(u)]);
           }
         }
       }
@@ -104,14 +109,14 @@ async function doUpdateStats(file) {
   } finally { await fh.close(); }
 }
 export function statsView(st) {
-  if (!st) return { tokensToday: 0, workedMs: 0, tokensPerMin: 0 };
+  if (!st) return { tokensToday: 0, workedMs: 0, weightedPerMin: 0 };
   const now = Date.now();
   const recent = st.events.filter(([ts]) => now - ts <= 5 * 60_000);
   st.events = st.events.filter(([ts]) => now - ts <= 10 * 60_000);
   const sum = recent.reduce((a, [, t]) => a + t, 0);
   let worked = st.workMs;
   if (st.lastReq) worked += (st.lastEnd >= st.lastReq ? st.lastEnd : now) - st.lastReq;
-  return { tokensToday: Math.round(st.tokens), workedMs: Math.max(0, worked), tokensPerMin: Math.round(sum / 5) };
+  return { tokensToday: Math.round(st.tokens), workedMs: Math.max(0, worked), weightedPerMin: Math.round(sum / 5) };
 }
 setInterval(() => {
   for (const [f, st] of statsState) if (Date.now() - st.touched > 60_000) statsState.delete(f);

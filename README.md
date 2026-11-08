@@ -59,7 +59,7 @@ The app is built with `swiftc` and signed ad hoc, with no Xcode project. No sign
 | Status | Employee behavior |
 |---|---|
 | Working | Sits at the desk and types, alternating hands. The monitor shows code. |
-| Caffeine rush | Token rate above 120k per minute: wide eyes, shaking, and papers bursting off the stack. |
+| Caffeine rush | Weighted token rate above 120k per minute (see [Token counts](#token-counts)): wide eyes, shaking, and papers bursting off the stack. |
 | Waiting for approval | Raises a hand and shows a speech bubble. The monitor turns blue. |
 | Idle | Walks along the aisles to the recliner. A small logo bounces on the monitor. |
 | Finished | Walks to the door and goes home. |
@@ -81,6 +81,15 @@ More features:
 - Notifications when a working session finishes or waits for approval.
 - Desk spacing adapts to the window size.
 - The interface follows your system language (Korean or English).
+
+## Token counts
+
+Two different numbers are derived from the `usage` field of each assistant message in the transcripts, subagents included.
+
+- **Tokens on a session card**: today's plain input plus output tokens. Cache reads and cache writes are not counted, because cache reads are usually most of the traffic and would hide the work actually done.
+- **Caffeine rush rate**: a weighted sum over the last 5 minutes, per minute. Input counts 1x, cache writes 1.25x, cache reads 0.1x, and output 5x, so the rate follows roughly what the requests cost. The threshold is fixed at 120k weighted tokens per minute.
+
+These are estimates read from local files, not billing figures.
 
 ## Usage limits
 

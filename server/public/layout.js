@@ -12,7 +12,7 @@ const ZOOMS = { small: 2, normal: 3, large: 4 };
 
 let theme = params.get('theme') || 'office';
 let baseZoom = Number(params.get('zoom')) || 3;
-let fireThresholdK = 120; // thousands of tokens per minute
+let fireThresholdK = 120; // thousands of weighted tokens per minute (see weightedTokens in server/lib/stats.mjs)
 let hourOverride = params.has('hour') ? Number(params.get('hour')) : null;
 let weatherOverride = params.has('weather') ? Number(params.get('weather')) : null;
 

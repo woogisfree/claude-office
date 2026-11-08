@@ -140,7 +140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     var zoom: String { d.string(forKey: "zoom") ?? "normal" }
     // City used for the weather and sunrise/sunset outside the window. The key must match CITIES in server.mjs.
     var city: String { d.string(forKey: "city") ?? "seoul" }
-    // The caffeine-rush threshold (thousands of tokens per minute) is fixed at 120.
+    // The caffeine-rush threshold (thousands of weighted tokens per minute) is fixed at 120.
     let threshold = 120
 
     func applicationDidFinishLaunching(_ n: Notification) {

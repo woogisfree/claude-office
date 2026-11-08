@@ -38,7 +38,23 @@ export function describeTool(name, input = {}) {
 const SMALL_WINDOW_MODEL = /claude-(3-|haiku-4-5|sonnet-4(?!-[6-9])|opus-4(?!-[6-9]))/;
 export function contextLimit(model, ctxTokens = 0) { return ctxTokens > 200000 || !SMALL_WINDOW_MODEL.test(model || '') ? 1e6 : 2e5; }
 
+// The last summary of each transcript, reused while the file has the same size and modification time.
+// The UI and the app both poll every couple of seconds, but most transcripts do not change between two polls.
+const summaryCache = new Map(); // file -> {size, mtimeMs, value}
+const SUMMARY_CACHE_MAX = 500;
+
 export async function summarize(file, sessionId) {
+  const stat = await fsp.stat(file);
+  const hit = summaryCache.get(file);
+  if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs) return { ...hit.value };
+  const value = await summarizeFile(file, sessionId);
+  summaryCache.delete(file); // re-insert so the oldest entry is always first
+  summaryCache.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, value });
+  if (summaryCache.size > SUMMARY_CACHE_MAX) summaryCache.delete(summaryCache.keys().next().value);
+  return { ...value };
+}
+
+async function summarizeFile(file, sessionId) {
   const { text } = await readTail(file);
   const rows = parseLines(text);
   let title = titleMemo.get(sessionId) || '';

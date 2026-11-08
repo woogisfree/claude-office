@@ -58,24 +58,24 @@ test('summarize: counts consecutive tool failures, ignores user rejections, and 
   assert.equal((await m.summarize(f2, 'sess-3')).failStreak, 0);
 });
 
-test('updateStats: applies the 1.25, 0.1, and 5 weights and counts each message id once', async () => {
+test('updateStats: tokens are the plain input plus output, the rate is weighted by 1.25, 0.1, and 5, and each message id counts once', async () => {
   const now = new Date().toISOString();
   const yesterday = new Date(Date.now() - 36 * 3600_000).toISOString();
-  const usage = { input_tokens: 100, cache_creation_input_tokens: 100, cache_read_input_tokens: 1000, output_tokens: 10 }; // 100 + 125 + 100 + 50
+  const usage = { input_tokens: 100, cache_creation_input_tokens: 100, cache_read_input_tokens: 1000, output_tokens: 10 }; // plain: 100 + 10, weighted: 100 + 125 + 100 + 50
   const a = (id, ts) => ({ type: 'assistant', timestamp: ts, message: { id, role: 'assistant', stop_reason: 'end_turn', usage, content: [] } });
   const f = writeTranscript('stats.jsonl', [a('m1', now), a('m1', now), a('m0', yesterday)]);
   const view = m.statsView(await m.updateStats(f));
-  assert.equal(view.tokensToday, 375);
-  assert.equal(view.tokensPerMin, 75); // the recent 5-minute total of 375 divided by 5
+  assert.equal(view.tokensToday, 110); // cache tokens are not counted
+  assert.equal(view.weightedPerMin, 75); // the recent 5-minute weighted total of 375 divided by 5
 });
 
 test('updateStats: does not recount already-read content when the file keeps growing', async () => {
   const now = new Date().toISOString();
   const row = (id) => ({ type: 'assistant', timestamp: now, message: { id, role: 'assistant', usage: { output_tokens: 10 }, content: [] } });
   const f = writeTranscript('grow.jsonl', [row('g1')]);
-  assert.equal(m.statsView(await m.updateStats(f)).tokensToday, 50);
+  assert.equal(m.statsView(await m.updateStats(f)).tokensToday, 10);
   fs.appendFileSync(f, line(row('g2')) + '\n');
-  assert.equal(m.statsView(await m.updateStats(f)).tokensToday, 100);
+  assert.equal(m.statsView(await m.updateStats(f)).tokensToday, 20);
 });
 
 test('readUsage: reads the status line cache, returns null for an empty window, and ok:false when the file is missing', async () => {
@@ -130,8 +130,9 @@ test('buildSubagents: adds every subagent transcript of today, finished ones inc
   fs.writeFileSync(path.join(sub, 'a2.meta.json'), line({ description: 'done agent', finished: true }));
   write('a3.jsonl', [row('x3', yesterday, 30)]);
   const r = await m.buildSubagents({ sessionId: 'parent', pid: 1, cwd: '/x' }, transcript);
-  assert.equal(r.tokensToday, 150); // (10 + 20) output tokens, weighted by 5
-  assert.deepEqual(r.items.map((i) => [i.name, i.tokensToday]), [['running agent', 50]]);
+  assert.equal(r.tokensToday, 30); // 10 + 20 output tokens
+  assert.equal(r.weightedPerMin, 30); // (10 + 20) output tokens weighted by 5 is 150 in 5 minutes, divided by 5
+  assert.deepEqual(r.items.map((i) => [i.name, i.tokensToday, i.weightedPerMin]), [['running agent', 10, 10]]);
 });
 
 test('updateStats: a large transcript is not read from the start, and the result matches a full read', async () => {
@@ -152,7 +153,7 @@ test('updateStats: a large transcript is not read from the start, and the result
   try { start = await m.findTodayStart(fh, fs.statSync(f).size, new Date().setHours(0, 0, 0, 0)); } finally { await fh.close(); }
   assert.ok(start > 10 * 1024 * 1024, `the search should skip most of the file (start=${start})`);
   assert.equal(fs.readFileSync(f).subarray(start - 1, start).toString(), '\n', 'the offset must be the start of a line');
-  assert.equal(m.statsView(await m.updateStats(f)).tokensToday, 150); // (10 + 20) output tokens, weighted by 5
+  assert.equal(m.statsView(await m.updateStats(f)).tokensToday, 30); // 10 + 20 output tokens
 });
 
 test('findTodayStart: returns 0 when the whole file is from today', async () => {
@@ -208,4 +209,35 @@ test('contextLimit: 200k for older models, 1M for newer ones and for sessions al
 test('collectSessions: every session item carries ctxLimit', async () => {
   const list = (await m.collectSessions(true)).list;
   assert.ok(list.length > 0 && list.every((s) => s.ctxLimit === 2e5 || s.ctxLimit === 1e6));
+});
+
+test('summarize: reuses the last result while size and modification time are unchanged, and reads again when they change', async () => {
+  const user = (text) => ({ type: 'user', message: { role: 'user', content: text } });
+  const stamp = (f, sec) => fs.utimesSync(f, sec, sec); // whole seconds, so the same value can be set again exactly
+  const t0 = Math.floor(Date.now() / 1000) - 100;
+  const f = writeTranscript('cache.jsonl', [user('first prompt')]);
+  stamp(f, t0);
+  assert.equal((await m.summarize(f, 'cache-s')).lastPrompt, 'first prompt');
+  // Same length and same timestamp, so only a cache can still answer with the old text.
+  fs.writeFileSync(f, line(user('other prompt')) + '\n');
+  stamp(f, t0);
+  assert.equal((await m.summarize(f, 'cache-s')).lastPrompt, 'first prompt');
+  // A newer modification time makes the file be read again.
+  stamp(f, t0 + 5);
+  assert.equal((await m.summarize(f, 'cache-s')).lastPrompt, 'other prompt');
+});
+
+test('summarize: a caller changing the returned object does not change what the next caller gets', async () => {
+  const f = writeTranscript('cache2.jsonl', [{ type: 'user', message: { role: 'user', content: 'hello' } }]);
+  const a = await m.summarize(f, 'cache-s2');
+  a.lastPrompt = 'changed by the caller';
+  assert.equal((await m.summarize(f, 'cache-s2')).lastPrompt, 'hello');
+});
+
+test('collectSessions: callers that arrive during a running collection share its result', async () => {
+  const [a, b] = await Promise.all([m.collectSessions(true), m.collectSessions(true)]);
+  assert.equal(a, b);
+  // Within the cache time a normal call returns that same result, and a forced call after it finished starts a new collection.
+  assert.equal(await m.collectSessions(), a);
+  assert.notEqual(await m.collectSessions(true), a);
 });

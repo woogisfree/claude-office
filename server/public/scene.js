@@ -7,8 +7,10 @@ let sessionList = [];
 // with an "office:hover" event, so the two files no longer depend on each other's load order.
 let hoverId = null;
 function setHover(id, notify = true) {
+  const changed = hoverId !== id;
   hoverId = id;
   if (notify) document.dispatchEvent(new CustomEvent('office:hover', { detail: id }));
+  if (changed) wake();
 }
 const door = { open: 0, idleFor: 0 };
 const PASTELS = ['#f8b4b4', '#b4d8f8', '#b8f0c0', '#f8e0a0', '#d8c0f8', '#f8c8e8', '#a8ecec', '#ffd0a0'];
@@ -40,7 +42,7 @@ function applySessions(list) {
     e.data = s;
     e.parent = s.parentId ? byId.get(s.parentId) : null;
     const thr = fireThresholdK * 1000;
-    if (s.tokensPerMin > thr) e.hot = true; else if (s.tokensPerMin < thr * 0.75) e.hot = false;
+    if (s.weightedPerMin > thr) e.hot = true; else if (s.weightedPerMin < thr * 0.75) e.hot = false;
   }
   resize();
   for (const e of emps.values()) if (e.path.length === 0 && e.phase === 'enter' && e.x === -100) { e.path = entryPath(e); }
@@ -230,33 +232,55 @@ function drawFullTag(e, d) {
   lines.forEach((s, i) => tx.fillText(s, x + w / 2, y + 1 + lh * (i + 0.5) + 0.2));
   tx.textAlign = 'left';
 }
-function drawText(t) {
-  tx.setTransform(L.zoom * devicePixelRatio, 0, 0, L.zoom * devicePixelRatio, 0, 0);
-  tx.clearRect(0, 0, L.W, L.H);
-  for (const e of emps.values()) if (!e.leaving && e.x !== -100) drawNameTag(deskPos(e.desk), e);
+// The text layer is a large canvas, and every redraw makes the compositor upload and blend it again. Most of the time nothing on it changes
+// (names stay and nobody moves), so the layer is described first as a list of items, and it is redrawn only when that list differs from the last one.
+let textSig = '';
+function planText(t) {
+  const items = [];
+  for (const e of emps.values()) {
+    if (e.leaving || e.x === -100) continue;
+    const d = deskPos(e.desk);
+    items.push({ key: ['tag', d.x, d.y, tagLines(e), parentColors.get(e.id) || '', e.parent ? parentColors.get(e.parent.sessionId) || '' : '', !!e.parent], run: () => drawNameTag(d, e) });
+  }
   for (const e of emps.values()) {
     if (e.leaving || e.walking || e.headY === undefined || e.x === -100) continue;
     const st = e.data.status;
-    if (e.surprise > 0) bubble(e.x, e.headY, '!', 'work', false);
-    else if (st === 'busy' && e.data.activity) bubble(e.x, e.headY, actText(e.data.activity), 'work', false);
+    if (e.surprise > 0) items.push({ key: ['bubble', e.x, e.headY, '!', 'work', false], run: () => bubble(e.x, e.headY, '!', 'work', false) });
+    else if (st === 'busy' && e.data.activity) { const text = actText(e.data.activity); items.push({ key: ['bubble', e.x, e.headY, text, 'work', false], run: () => bubble(e.x, e.headY, text, 'work', false) }); }
     else if (st === 'waiting') {
-      const long = Date.now() - (e.data.statusUpdatedAt || Date.now()) > 30000 && Math.floor(t) % 2 === 0;
-      bubble(e.x, e.headY, waitingText(e.data.waitingFor), 'wait', long);
+      const long = Date.now() - (e.data.statusUpdatedAt || Date.now()) > 30000 && Math.floor(t) % 2 === 0, text = waitingText(e.data.waitingFor);
+      items.push({ key: ['bubble', e.x, e.headY, text, 'wait', long], run: () => bubble(e.x, e.headY, text, 'wait', long) });
     }
   }
-  if (hoverId && emps.has(hoverId)) { const e = emps.get(hoverId); drawFullTag(e, deskPos(e.desk)); }
+  if (hoverId && emps.has(hoverId)) { const e = emps.get(hoverId), d = deskPos(e.desk); items.push({ key: ['full', d.x, d.y, tagLines(e)], run: () => drawFullTag(e, d) }); }
+  return items;
+}
+function drawText(t) {
+  const items = planText(t);
+  // Anything that changes the size or the scale of the layer must be part of the signature, because resizing the canvas also clears it.
+  const sig = JSON.stringify([tcv.width, tcv.height, L.zoom, devicePixelRatio, L.W, L.H, items.map((i) => i.key)]);
+  if (sig === textSig) return;
+  textSig = sig;
+  tx.setTransform(L.zoom * devicePixelRatio, 0, 0, L.zoom * devicePixelRatio, 0, 0);
+  tx.clearRect(0, 0, L.W, L.H);
+  for (const i of items) i.run();
 }
 
 // ───────── Loop and size ─────────
-let last = 0, lastDraw = 0;
-// At most one animation frame is queued at a time, so restarting the loop never doubles it.
-let rafQueued = false;
-function queueLoop() { if (!rafQueued) { rafQueued = true; requestAnimationFrame((ms) => { rafQueued = false; loop(ms); }); } }
+let last = 0;
+// The pace of the loop (pacing.js): the frame rate follows what is moving, and the loop sleeps between frames.
+const pacer = createPacer({
+  fps: () => chooseFps({ doorOpen: door.open, lively: theme !== 'office' || ['rain', 'storm', 'snow'].includes(weatherKind(curWeather())), employees: emps.values() }),
+  draw: loop,
+  raf: (cb) => requestAnimationFrame(cb),
+  setTimer: (fn, ms) => setTimeout(fn, ms),
+  clearTimer: (id) => clearTimeout(id),
+  hidden: () => document.hidden,
+});
+const queueLoop = () => pacer.queue();
+const wake = () => pacer.wake();
 function loop(ms) {
-  if (document.hidden) return; // the loop is restarted by the visibilitychange handler
-  queueLoop();
-  if (ms - lastDraw < 31) return; // Draw at most 30 times per second.
-  const dt = Math.min(0.1, (ms - (last || ms)) / 1000); last = ms; lastDraw = ms;
+  const dt = Math.min(0.1, (ms - (last || ms)) / 1000); last = ms;
   let near = false;
   for (const e of [...emps.values()]) { step(e, dt, ms); if (e.x !== -100 && (e.phase === 'enter' || e.leaving) && Math.hypot(e.x - L.doorX, e.y - L.corrY) < 40) near = true; }
   if (near) { door.idleFor = 0; door.open = Math.min(1, door.open + dt / 0.25); }
@@ -314,7 +338,7 @@ tcv.addEventListener('mousemove', (ev) => { const e = empAt(ev), id = e ? e.id :
 tcv.addEventListener('mouseleave', () => setHover(null));
 tcv.addEventListener('click', (ev) => {
   const e = empAt(ev); if (!e) return;
-  e.surprise = 1.2;
+  e.surprise = 1.2; wake();
   const now = performance.now(); e.clickTimes = e.clickTimes.filter((x) => now - x < 1000); e.clickTimes.push(now);
   if (e.clickTimes.length >= 10) { e.sulk = 5; e.clickTimes = []; e.surprise = 0; } // Easter egg: click 10 times within a second and the employee sulks for 5 seconds.
 });
