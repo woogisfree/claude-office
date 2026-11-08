@@ -4,6 +4,18 @@
 
 > **고지**: 개인이 만든 비공식 프로젝트이며, Anthropic과 관련이 없습니다. "Claude"와 "Claude Code"는 Anthropic의 상표입니다.
 
+<p align="center">
+  <img src="docs/office-main.png" alt="Claude Office 낮 풍경: 일하는 직원, 승인 대기, 휴식, 카페인 폭주 상태" width="720">
+</p>
+
+<p align="center">
+  <img src="docs/office-night.png" alt="밤 풍경" width="260">
+  <img src="docs/theme-mine.png" alt="탄광 테마" width="260">
+  <img src="docs/theme-xmas.png" alt="크리스마스 테마" width="260">
+</p>
+
+<sub>스크린샷은 실제 세션이 아니라 가짜 데모 세션으로 만들었습니다.</sub>
+
 ## 기능
 
 - 세션마다 책상 하나가 배정되고, 상태가 직원의 행동으로 표현됩니다.
