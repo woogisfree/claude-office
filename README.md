@@ -82,6 +82,15 @@ More features:
 - Desk spacing adapts to the window size.
 - The interface follows your system language (Korean or English).
 
+## Auto clock-out
+
+Desktop app sessions keep their process alive while they are open, so a session you finished with yesterday can still be sitting in the office. Choose **Auto Clock-Out** in the menu bar menu (Off, or after 2, 4, or 8 hours idle) to send them home.
+
+- It is off by default.
+- Only resting sessions leave: the time counts from when the session became idle. A session that is working or waiting for approval never leaves, and neither does a session whose subagent or teammate is still working.
+- Nothing is stopped. The session keeps running, and the employee walks back in as soon as it works or asks for approval again.
+- Sessions that left are folded into one row under the cards ("N sessions clocked out"). Click the row to list them, and click a session to jump to it.
+
 ## Token counts
 
 Two different numbers are derived from the `usage` field of each assistant message in the transcripts, subagents included.

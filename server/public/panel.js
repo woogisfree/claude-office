@@ -6,6 +6,8 @@ const store = {
 const collapsed = new Set();
 let fStatus = store.get('office.fStatus', 'all');
 let fProject = store.get('office.fProject', 'all');
+// Sessions that went home after resting for autoLeaveHours (0 = never). They are listed in one folded row under the cards.
+let autoLeaveHours = Number(params.get('autoleave')) || 0, rawSessions = [], goneList = [], goneOpen = false;
 
 const fmtTok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(Math.round(n)));
 const fmtDur = (ms) => fmtMin(Math.floor(ms / 60000));
@@ -47,12 +49,20 @@ function renderCards(list) {
       ${hasKids ? `<button class="fold" data-fold="${esc(s.sessionId)}" aria-expanded="${collapsed.has(s.sessionId) ? 'false' : 'true'}">${collapsed.has(s.sessionId) ? tr('unfold') : tr('fold')}</button>` : ''}
     </div>`;
   }
-  html = html || `<div class="group">${list.length ? tr('noMatch') : tr('noSessions')}</div>`;
+  const goneShown = goneList.filter((s) => (fStatus === 'all' || fStatus === 'idle') && (fProject === 'all' || projOf(s) === fProject));
+  if (!html && !goneShown.length) html = `<div class="group">${list.length || goneList.length ? tr('noMatch') : tr('noSessions')}</div>`;
+  if (goneShown.length) {
+    const now = Date.now();
+    html += `<button class="goneToggle" data-gone-toggle aria-expanded="${goneOpen}"><span class="chev">▸</span>${tr('goneRow', goneShown.length)}</button>`;
+    if (goneOpen) for (const s of goneShown) html += `<div class="gone" data-id="${esc(s.sessionId)}" role="button" tabindex="0"><span class="n">${esc(s.name)}</span><span class="t">${tr('goneIdle', fmtDur(now - s.statusUpdatedAt))}</span></div>`;
+  }
   if (box.dataset.sig !== html) {
     // Replacing the cards would drop the keyboard focus, so remember what had it and focus the same control again.
     const had = document.activeElement && box.contains(document.activeElement) ? document.activeElement : null;
-    const keep = had ? { id: had.closest('.card')?.dataset.id, fold: had.matches('[data-fold]') } : null;
+    const keep = had ? { id: had.closest('.card')?.dataset.id, fold: had.matches('[data-fold]'), toggle: had.matches('[data-gone-toggle]'), goneId: had.closest('.gone')?.dataset.id } : null;
     box.dataset.sig = html; box.innerHTML = html; box.scrollTop = prevScroll; highlightCard(hoverId);
+    if (keep && keep.toggle) box.querySelector('[data-gone-toggle]')?.focus({ preventScroll: true });
+    if (keep && keep.goneId) box.querySelector(`.gone[data-id="${CSS.escape(keep.goneId)}"]`)?.focus({ preventScroll: true });
     if (keep && keep.id) {
       const card = box.querySelector(`.card[data-id="${CSS.escape(keep.id)}"]`);
       const target = card && (keep.fold ? card.querySelector('[data-fold]') : card.querySelector('.main'));
@@ -76,7 +86,8 @@ function renderCards(list) {
 $('#cards').addEventListener('click', (ev) => {
   const fold = ev.target.closest('[data-fold]');
   if (fold) { const id = fold.dataset.fold; collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id); renderCards(sessionList); ev.stopPropagation(); return; }
-  const card = ev.target.closest('.card'); if (!card) return;
+  if (ev.target.closest('[data-gone-toggle]')) { goneOpen = !goneOpen; renderCards(sessionList); return; }
+  const card = ev.target.closest('.card, .gone'); if (!card) return;
   jumpToSession(card.dataset.id);
 });
 function jumpToSession(id) {
@@ -84,7 +95,7 @@ function jumpToSession(id) {
 }
 // Enter or Space on a focused card does what a click does. The cards also follow the keyboard focus, like the mouse hover.
 $('#cards').addEventListener('keydown', (ev) => {
-  if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.classList.contains('main')) { ev.preventDefault(); jumpToSession(ev.target.closest('.card').dataset.id); }
+  if ((ev.key === 'Enter' || ev.key === ' ') && (ev.target.classList.contains('main') || ev.target.classList.contains('gone'))) { ev.preventDefault(); jumpToSession(ev.target.closest('.card, .gone').dataset.id); }
 });
 $('#cards').addEventListener('focusin', (ev) => { const c = ev.target.closest('.card'); if (c) setHover(c.dataset.id); });
 $('#cards').addEventListener('focusout', () => setHover(null));
@@ -114,10 +125,17 @@ async function pollSessions() {
   try {
     const r = await fetch('/api/sessions');
     $('#missing').hidden = r.headers.get('x-sessions-dir-missing') !== '1';
-    const list = await r.json();
-    applySessions(list); renderCards(list);
+    rawSessions = await r.json();
+    refreshSessions();
   } catch {}
 }
+// The office and the cards show the sessions that stayed. Calling this again when the setting changes moves them without waiting for the next poll.
+function refreshSessions() {
+  const { present, gone } = splitGone(rawSessions, autoLeaveHours);
+  goneList = gone;
+  applySessions(present); renderCards(present);
+}
+window.setAutoLeave = (hours) => { autoLeaveHours = Number(hours) || 0; refreshSessions(); };
 let lastUsage = null;
 const fmtLeft = (sec) => fmtMin(Math.max(0, Math.round(sec / 60)));
 // Receive the usage the app (Swift) fetched from claude.ai. The response format is not a public spec, so field names are interpreted loosely.
