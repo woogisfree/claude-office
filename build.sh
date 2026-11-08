@@ -31,14 +31,20 @@ case "$(uname -m)" in
 esac
 
 APP="build/Claude Office.app"
+# Build in a staging folder and replace the existing app only when everything succeeded, so a failed build keeps the working app.
+STAGE_DIR="build/.staging"
+STAGE="$STAGE_DIR/Claude Office.app"
+rm -rf "$STAGE_DIR"
+mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources"
+swiftc -O -o "$STAGE/Contents/MacOS/ClaudeOffice" app/main.swift -target "$ARCH-apple-macos13.0"
+cp app/Info.plist "$STAGE/Contents/Info.plist"
+cp -R server "$STAGE/Contents/Resources/server"
+[ -f app/AppIcon.icns ] && cp app/AppIcon.icns "$STAGE/Contents/Resources/AppIcon.icns"
+[ -f app/StatusIcon.png ] && cp app/StatusIcon.png "$STAGE/Contents/Resources/StatusIcon.png"
+codesign --force --deep --sign - "$STAGE"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-swiftc -O -o "$APP/Contents/MacOS/ClaudeOffice" app/main.swift -target "$ARCH-apple-macos13.0"
-cp app/Info.plist "$APP/Contents/Info.plist"
-cp -R server "$APP/Contents/Resources/server"
-[ -f app/AppIcon.icns ] && cp app/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
-[ -f app/StatusIcon.png ] && cp app/StatusIcon.png "$APP/Contents/Resources/StatusIcon.png"
-codesign --force --deep --sign - "$APP"
+mv "$STAGE" "$APP"
+rm -rf "$STAGE_DIR"
 echo "Done: $APP ($ARCH, Node $("$NODE_BIN" -v))"
 
 if [ "${1:-}" != "--no-open" ]; then
