@@ -164,6 +164,11 @@ function drawDeskBlock(d, emp, t) {
   rect(x + 3, y + 35, 52, 10, OUT); rect(x + 4, y + 35, 50, 9, p.desk); rect(x + 4, y + 43, 50, 1, p.deskLo);
   rect(x + 4, y + 45, 4, 3, OUT); rect(x + 50, y + 45, 4, 3, OUT);
   if (theme === 'office') drawKeyboard(x + 3, y + 29); // 직원(x+11) 바로 앞
+  // 일하는 중에는 내려간 손 쪽 키 두 개가 노랗게 켜졌다 꺼지며 번갈아 눌리는 모습을 보여 준다. 손 모양(art.js)과 같은 박자를 쓴다.
+  if (theme === 'office' && emp && st === 'busy') {
+    const left = Math.floor(t * (emp.hot ? 16 : 8)) % 2 === 0;
+    for (const kx of left ? [6, 8] : [14, 16]) rect(x + kx, y + 31, 1, 1, '#fff0a0');
+  }
   if (emp) {
     drawMeter(x + 46, y + 28, emp.data.ctxTokens / ctxLimit(emp.data.model, emp.data.ctxTokens));
     if (emp.mugOnDesk) drawMug(x + 5, y + 22, 0, t);
