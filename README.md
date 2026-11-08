@@ -1,54 +1,41 @@
+<div align="center">
+
 # Claude Office
 
-지금 실행 중인 Claude Code 세션을 픽셀아트 사무실의 직원으로 보여 주는 macOS 메뉴 막대 앱입니다.
+**See your Claude Code sessions as employees in a pixel-art office.**
 
-> **고지**: 개인이 만든 비공식 프로젝트이며, Anthropic과 관련이 없습니다. "Claude"와 "Claude Code"는 Anthropic의 상표입니다.
+A macOS menu bar app. Every running session gets a desk, and what the session is doing shows up as what the employee is doing.
 
-<p align="center">
-  <img src="docs/office-main.png" alt="Claude Office 낮 풍경: 일하는 직원, 승인 대기, 휴식, 카페인 폭주 상태" width="720">
-</p>
+[![License: MIT](https://img.shields.io/github/license/woogisfree/claude-office)](LICENSE)
+![Platform: macOS 13+](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey)
+![Node 18+](https://img.shields.io/badge/node-18%2B-339933)
+[![Stars](https://img.shields.io/github/stars/woogisfree/claude-office?style=flat)](https://github.com/woogisfree/claude-office/stargazers)
 
-<p align="center">
-  <img src="docs/office-night.png" alt="밤 풍경" width="260">
-  <img src="docs/theme-mine.png" alt="탄광 테마" width="260">
-  <img src="docs/theme-xmas.png" alt="크리스마스 테마" width="260">
-</p>
+[Highlights](#highlights) •
+[Quick start](#quick-start) •
+[What you see](#what-you-see) •
+[Usage limits](#usage-limits) •
+[How it works](#how-it-works) •
+[Development](#development)
 
-<sub>스크린샷은 실제 세션이 아니라 가짜 데모 세션으로 만들었습니다.</sub>
+<img src="docs/office-main.png" alt="Claude Office by day: working, waiting for approval, resting, and caffeine-rush employees" width="760">
 
-## 기능
+<sub>Screenshots use fake demo sessions, not real ones.</sub>
 
-- 세션마다 책상 하나가 배정되고, 상태가 직원의 행동으로 표현됩니다.
-  - **일하는 중**: 자리에 앉아 타이핑합니다. 토큰 사용 속도가 임계값을 넘으면 카페인 폭주 모드가 됩니다.
-  - **승인 대기**: 손을 들고 기다립니다.
-  - **쉬는 중**: 휴게 공간으로 이동합니다.
-- 카페인 폭주 중에는 책상 위로 서류가 날아다님
-- 직원과 책상 구역(모니터, 리클라이너, 이름표) 어디에 마우스를 올려도 해당 세션이 강조됨
-- 세션 카드를 누르면 해당 세션으로 이동: 터미널(tmux, cmux, Ghostty, iTerm) 세션은 창과 탭으로, Claude 데스크톱 앱 세션은 앱의 `claude://code/continue?session=local_…` 링크로 해당 채팅을 엽니다. 데스크톱 링크는 공식 문서에 없는 앱 내부 경로라 앱 업데이트로 바뀔 수 있습니다.
-- 세션 카드 패널과 필터, 토큰 사용량 표시
-- 5시간 한도와 주간 한도의 남은 비율 표시
-- 테마: 사무실, 탄광, 크리스마스
-- 실제 일출과 일몰, 날씨를 반영하는 창밖 풍경과 야간 조명
-- 일하던 세션이 끝나거나 승인을 기다리면 알림
-- 창 크기에 맞춰 책상 간격이 자동으로 조정됨
+</div>
 
-## 구성
+## Highlights
 
-| 계층 | 기술 |
-|---|---|
-| 앱 셸 | Swift (AppKit, WKWebView) |
-| 로컬 서버 | Node.js, 의존성 없는 `node:http` |
-| 화면 | 바닐라 JS, Canvas 2D |
+- **Glanceable**: know which sessions are working, waiting for you, or idle without switching windows.
+- **Click to jump**: select a session and land in its terminal tab or its Claude desktop chat.
+- **Lightweight and local**: a dependency-free Node server that only reads `~/.claude` and listens on `127.0.0.1`.
+- **Alive**: day and night follow your real sunrise, sunset, and weather. Idle employees even wear party hats on Friday evenings.
 
-서버는 `127.0.0.1`에서만 열리며 `~/.claude`를 읽기 전용으로 참조합니다.
+> **Disclaimer**: This is an unofficial personal project and is not affiliated with Anthropic. "Claude" and "Claude Code" are trademarks of Anthropic.
 
-## 요구 환경
+## Quick start
 
-- macOS 13 이상 (Apple Silicon과 Intel 모두 지원, 빌드할 때 자동으로 맞춥니다)
-- Node.js 18 이상 (22에서 개발)
-- Swift 컴파일러: Xcode 또는 Command Line Tools (`xcode-select --install`)
-
-## 빌드와 실행
+Requirements: macOS 13+ (Apple Silicon or Intel), Node.js 18+, and a Swift compiler (Xcode or `xcode-select --install`).
 
 ```bash
 git clone https://github.com/woogisfree/claude-office
@@ -56,49 +43,85 @@ cd claude-office
 ./build.sh
 ```
 
-`./build.sh`는 Swift와 Node가 설치되어 있는지 먼저 확인하고(없으면 설치 방법을 안내합니다), 앱을 빌드한 뒤 바로 실행합니다. 이미 실행 중인 앱은 종료하고 새 버전으로 다시 엽니다. 빌드만 하려면 `./build.sh --no-open`을 사용합니다.
+`./build.sh` checks that Swift and Node are installed (and tells you how to get them if not), builds the app, and launches it. If the app is already running, it quits the old one and opens the new build. Use `./build.sh --no-open` to build only.
 
-Xcode 프로젝트 없이 `swiftc`로 빌드하고 ad-hoc 서명을 합니다. 서명된 배포용 바이너리는 제공하지 않으므로 직접 빌드해서 사용해야 합니다. 직접 빌드한 앱은 Gatekeeper에 막히지 않습니다.
-
-`/Applications`에 설치하려면 빌드한 앱을 복사합니다. 실행 중이면 먼저 종료해야 합니다.
+To install into `/Applications`, quit the app and copy it:
 
 ```bash
 cp -R "build/Claude Office.app" /Applications/
 ```
 
-화면만 확인하려면 서버를 단독으로 실행해도 됩니다.
+The app is built with `swiftc` and signed ad hoc, with no Xcode project. No signed release binary is provided, so build it yourself. A locally built app is not blocked by Gatekeeper.
+
+## What you see
+
+| Status | Employee behavior |
+|---|---|
+| Working | Sits at the desk and types, alternating hands. The monitor shows code. |
+| Caffeine rush | Token rate above the threshold: wide eyes, shaking, and papers bursting off the stack. |
+| Waiting for approval | Raises a hand and shows a speech bubble. The monitor turns blue. |
+| Idle | Walks along the aisles to the recliner. A small logo bounces on the monitor. |
+| Finished | Walks to the door and goes home. |
+
+Employees only walk along the aisles and side paths, never through desks.
+
+<p align="center">
+  <img src="docs/office-night.png" alt="Night scene" width="250">
+  <img src="docs/theme-mine.png" alt="Mine theme" width="250">
+  <img src="docs/theme-xmas.png" alt="Christmas theme" width="250">
+</p>
+
+More features:
+
+- Hover anywhere over an employee or their desk area (monitor, recliner, name tag) to highlight that session.
+- Click a session card to jump to it. Terminal sessions (tmux, cmux, Ghostty, iTerm) open the matching window and tab. Claude desktop app sessions open through the app's `claude://code/continue?session=local_…` link, which is an internal route that is not in the official docs and may change with an app update.
+- Session panel with filters and token usage.
+- Themes: office, mine, Christmas.
+- Notifications when a working session finishes or waits for approval.
+- Desk spacing adapts to the window size.
+
+## Usage limits
+
+The remaining percentage of the 5-hour and weekly limits is read from two sources:
+
+1. The cache file written by the Claude Code status line script (`~/.claude/.statusline-ratelimit-cache`).
+2. claude.ai's internal usage API, called with the session you create through **claude.ai login** in the menu.
+
+The second source is an **unofficial endpoint that is not in any official documentation**. It may change or stop working without notice, and you use it at your own risk. The login cookie is stored only in the app's WebKit storage and is never sent anywhere else. **Log out** in the menu deletes it. If a fetch fails, the last value stays visible, dimmed, with how long ago it was read.
+
+## How it works
+
+| Layer | Technology |
+|---|---|
+| App shell | Swift (AppKit, WKWebView) |
+| Local server | Node.js, dependency-free `node:http` |
+| UI | Vanilla JS, Canvas 2D |
+
+The server reads session transcripts and process info from `~/.claude`, derives each session's status and token rate, and serves a small JSON API plus the UI. The app shell hosts the UI in a WKWebView and adds the menu bar item, notifications, and session focusing.
+
+The only external network traffic is Open-Meteo (weather and sunrise times) and the claude.ai call described above.
+
+```
+app/      Swift app shell, Info.plist, icon
+server/   Node server (server.mjs) and UI (public/)
+build.sh  App bundle build script
+docs/     README screenshots
+```
+
+## Development
+
+Run the server on its own to work on the UI in a browser:
 
 ```bash
 PORT=0 node server/server.mjs
 ```
 
-## 테스트
-
-서버의 토큰 집계와 대화 기록 해석, 화면 배치 계산을 Node 내장 테스트로 확인합니다. 별도 설치는 필요 없습니다.
+Run the tests (Node's built-in runner, no installation needed). They cover token aggregation, transcript parsing, and the layout calculation:
 
 ```bash
 npm test
 ```
 
-## 한도 표시에 대한 안내
-
-5시간 및 주간 한도는 두 가지 경로로 가져옵니다.
-
-1. Claude Code 상태 표시줄 스크립트가 남기는 캐시 파일(`~/.claude/.statusline-ratelimit-cache`)
-2. 메뉴의 **claude.ai 로그인**으로 로그인한 세션을 사용해 claude.ai의 내부 사용량 API를 호출
-
-2번 경로는 **공식 문서에 없는 비공식 엔드포인트**입니다. 예고 없이 동작이 바뀌거나 중단될 수 있으며, 사용에 따른 책임은 사용자에게 있습니다. 로그인 쿠키는 앱의 WebKit 저장소에만 보관되고 외부로 전송되지 않습니다. 메뉴의 **로그아웃**으로 삭제할 수 있습니다.
-
-외부 네트워크 통신은 날씨와 일출 시각을 가져오는 Open-Meteo, 그리고 위의 claude.ai 호출뿐입니다.
-
-## 폴더 구조
-
-```
-app/      Swift 앱 셸, Info.plist, 아이콘
-server/   Node 서버(server.mjs)와 화면(public/)
-build.sh  앱 번들 빌드 스크립트
-```
-
-## 라이선스
+## License
 
 [MIT](LICENSE)
