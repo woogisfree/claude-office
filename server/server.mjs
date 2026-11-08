@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(HERE, 'public');
-const CLAUDE = path.join(os.homedir(), '.claude');
+// 테스트나 다른 위치를 읽고 싶을 때 CLAUDE_OFFICE_CLAUDE_DIR 로 ~/.claude 위치를 바꿀 수 있다.
+const CLAUDE = process.env.CLAUDE_OFFICE_CLAUDE_DIR || path.join(os.homedir(), '.claude');
 const SESSIONS_DIR = path.join(CLAUDE, 'sessions');
 const PROJECTS_DIR = path.join(CLAUDE, 'projects');
 const TEAMS_DIR = path.join(CLAUDE, 'teams');
@@ -488,7 +489,13 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT === undefined ? 4317 : Number(process.env.PORT);
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`Claude Office: http://localhost:${server.address().port}`);
-});
+// 직접 실행했을 때만 서버를 연다. 테스트가 이 파일을 불러올 때는 열지 않는다.
+const isMain = process.argv[1] && fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
+if (isMain) {
+  const PORT = process.env.PORT === undefined ? 4317 : Number(process.env.PORT);
+  server.listen(PORT, '127.0.0.1', () => {
+    console.log(`Claude Office: http://localhost:${server.address().port}`);
+  });
+}
+
+export { parseLines, cut, stripTags, describeTool, summarize, updateStats, statsView, readUsage, collectSessions };

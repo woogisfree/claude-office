@@ -60,6 +60,14 @@ cp -R "build/Claude Office.app" /Applications/
 PORT=0 node server/server.mjs
 ```
 
+## 테스트
+
+서버의 토큰 집계와 대화 기록 해석, 화면 배치 계산을 Node 내장 테스트로 확인합니다. 별도 설치는 필요 없습니다.
+
+```bash
+npm test
+```
+
 ## 한도 표시에 대한 안내
 
 5시간 및 주간 한도는 두 가지 경로로 가져옵니다.
