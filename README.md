@@ -19,7 +19,7 @@ A macOS menu bar app. Every running session gets a desk, and what the session is
 [How it works](#how-it-works) •
 [Development](#development)
 
-<img src="docs/office-main.png" alt="Claude Office by day: working, waiting for approval, resting, and caffeine-rush employees" width="760">
+<img src="docs/demo.gif" alt="Claude Office in action: employees type, wait for approval, rest in recliners, and throw papers during a caffeine rush" width="720">
 
 <sub>Screenshots use fake demo sessions, not real ones.</sub>
 
