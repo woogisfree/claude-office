@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 // Point at a temporary ~/.claude before importing the server, and block the weather lookup with manual values.
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-office-test-'));
@@ -168,4 +169,43 @@ test('findTranscript: a session that is not found does not block the search for 
   fs.writeFileSync(path.join(projects, 'found-id.jsonl'), '');
   assert.equal(await m.findTranscript('missing-id', '/no/such/cwd'), null); // starts its own 30-second limit
   assert.equal(await m.findTranscript('found-id', '/no/such/cwd'), path.join(projects, 'found-id.jsonl'));
+});
+
+test('isSameProcess: accepts the recorded UTC start and the local start from ps, and rejects another start time', () => {
+  // procStart is written in UTC; ps prints local time. 2026-11-07 11:00:22 UTC is 20:00:22 in Korea.
+  const utc = 'Sat Nov  7 11:00:22 2026';
+  const asLocal = new Date(Date.parse(utc + ' UTC'));
+  const psText = (d) => d.toString().replace(/^(\w{3}) (\w{3}) (\d{2}) (\d{4}) (\d{2}:\d{2}:\d{2}).*$/, (_, w, mo, dd, y, t) => `${w} ${mo} ${String(Number(dd)).padStart(2, ' ')} ${t} ${y}`);
+  assert.equal(m.isSameProcess(utc, psText(asLocal)), true, 'UTC recorded, local printed');
+  assert.equal(m.isSameProcess(psText(asLocal), psText(asLocal)), true, 'both in local time');
+  assert.equal(m.isSameProcess(utc, psText(new Date(asLocal.getTime() + 3600_000))), false, 'a different start time means the pid was reused');
+  assert.equal(m.isSameProcess(utc, psText(new Date(asLocal.getTime() + 3000))), true, 'a few seconds of difference is tolerated');
+  // Anything unreadable counts as a match, so a real session is never hidden by mistake.
+  assert.equal(m.isSameProcess(undefined, 'Sat Nov  7 20:00:22 2026'), true);
+  assert.equal(m.isSameProcess(utc, ''), true);
+  assert.equal(m.isSameProcess('garbage', 'Sat Nov  7 20:00:22 2026'), true);
+});
+
+test('collectSessions: hides a session whose pid now belongs to a process that started at another time', async () => {
+  const sessions = path.join(TMP, 'sessions');
+  fs.mkdirSync(sessions, { recursive: true });
+  const psStart = execFileSync('ps', ['-o', 'lstart=', '-p', String(process.pid)], { encoding: 'utf8' }).trim();
+  const mk = (id, procStart) => fs.writeFileSync(path.join(sessions, id + '.json'), line({ pid: process.pid, sessionId: id, cwd: '/x', startedAt: Date.now(), name: id, status: 'idle', ...(procStart ? { procStart } : {}) }));
+  mk('real-local', psStart);                                              // matches
+  mk('real-utc', new Date(Date.parse(psStart)).toUTCString().replace(/^(\w{3}), (\d{2}) (\w{3}) (\d{4}) (\S+) GMT$/, (_, w, d, mo, y, t) => `${w} ${mo} ${String(Number(d)).padStart(2, ' ')} ${t} ${y}`)); // matches, written in UTC
+  mk('reused', 'Mon Jan  1 00:00:00 2001');                              // another process started at this pid
+  mk('legacy');                                                           // older file without procStart is kept
+  const names = (await m.collectSessions(true)).list.map((s) => s.sessionId).sort();
+  assert.deepEqual(names, ['legacy', 'real-local', 'real-utc']);
+});
+
+test('contextLimit: 200k for older models, 1M for newer ones and for sessions already past 200k', () => {
+  for (const model of ['claude-3-5-sonnet-20241022', 'claude-haiku-4-5', 'claude-sonnet-4-20250514', 'claude-sonnet-4-5', 'claude-opus-4', 'claude-opus-4-1', 'claude-opus-4-5']) assert.equal(m.contextLimit(model, 1000), 2e5, model);
+  for (const model of ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-opus-5-5', 'claude-fable-5-1', '', undefined]) assert.equal(m.contextLimit(model, 1000), 1e6, String(model));
+  assert.equal(m.contextLimit('claude-sonnet-4-5', 250000), 1e6);
+});
+
+test('collectSessions: every session item carries ctxLimit', async () => {
+  const list = (await m.collectSessions(true)).list;
+  assert.ok(list.length > 0 && list.every((s) => s.ctxLimit === 2e5 || s.ctxLimit === 1e6));
 });
