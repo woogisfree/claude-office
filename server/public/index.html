@@ -10,11 +10,11 @@
 <header id="top">
   <h1>Claude Office</h1>
   <div id="usage">
-    <div class="meter" id="u5"><span class="lbl" data-i18n="lbl5"></span><span class="bar"><i></i></span><span class="txt"></span></div>
-    <div class="meter" id="uw"><span class="lbl" data-i18n="lblW"></span><span class="bar"><i></i></span><span class="txt"></span></div>
+    <div class="meter" id="u5" role="img"><span class="lbl" data-i18n="lbl5"></span><span class="bar"><i></i></span><span class="txt"></span></div>
+    <div class="meter" id="uw" role="img"><span class="lbl" data-i18n="lblW"></span><span class="bar"><i></i></span><span class="txt"></span></div>
   </div>
   <label id="timebox" data-i18n-title="hourTitle">
-    <input id="hour" type="range" min="0" max="24" step="0.25" value="12">
+    <input id="hour" type="range" min="0" max="24" step="0.25" value="12" data-i18n-label="hourSlider">
     <span id="hourText" data-i18n="hourReal"></span>
     <button id="hourReset" type="button" data-i18n="hourBtn"></button>
   </label>
@@ -22,16 +22,16 @@
   <button id="panelBtn" type="button" data-i18n-title="panelTitle">☰</button>
 </header>
 <main id="main">
-  <div id="stage"><div id="wrap"><canvas id="office"></canvas><canvas id="text"></canvas></div></div>
+  <div id="stage"><div id="wrap"><canvas id="office" role="img"></canvas><canvas id="text" aria-hidden="true"></canvas></div></div>
   <aside id="panel">
     <div id="filters">
-      <select id="fStatus">
+      <select id="fStatus" data-i18n-label="filterStatus">
         <option value="all" data-i18n="allStatus"></option>
         <option value="waiting" data-i18n="stWaiting"></option>
         <option value="busy" data-i18n="stBusy"></option>
         <option value="idle" data-i18n="stIdle"></option>
       </select>
-      <select id="fProject"><option value="all" data-i18n="allProjects"></option></select>
+      <select id="fProject" data-i18n-label="filterProject"><option value="all" data-i18n="allProjects"></option></select>
     </div>
     <div id="cards"></div>
   </aside>
@@ -40,7 +40,7 @@
 <div id="missing" hidden>
   <div class="box"><b data-i18n="missingTitle"></b><p><code>~/.claude/sessions</code> <span data-i18n="missingBody"></span></p></div>
 </div>
-<div id="help" hidden></div>
+<div id="help" role="dialog" aria-modal="true" tabindex="-1" hidden></div>
 <script src="i18n.js"></script>
 <script src="layout.js"></script>
 <script src="sky.js"></script>

@@ -4,6 +4,8 @@ const LANG = /^ko\b/i.test(navigator.language || '') ? 'ko' : 'en';
 const STR = {
   ko: {
     stWaiting: '승인 대기', stBusy: '일하는 중', stIdle: '쉬는 중',
+    filterStatus: '상태 필터', filterProject: '프로젝트 필터', hourSlider: '창밖 시각',
+    officeLabel: (n, w, b, i) => (n ? `사무실: 세션 ${n}개 (승인 대기 ${w}, 일하는 중 ${b}, 쉬는 중 ${i})` : '사무실: 실행 중인 세션이 없습니다'),
     allStatus: '전체 상태', allProjects: '전체 프로젝트', unknownProject: '(알 수 없음)',
     working: '작업 중', standby: '대기 중', fold: '접기', unfold: '펴기',
     teammate: '팀원', subagent: '서브에이전트', tokens: (n) => `${n} 토큰`,
@@ -31,6 +33,8 @@ const STR = {
   },
   en: {
     stWaiting: 'Waiting', stBusy: 'Working', stIdle: 'Resting',
+    filterStatus: 'Filter by status', filterProject: 'Filter by project', hourSlider: 'Time of day outside the window',
+    officeLabel: (n, w, b, i) => (n ? `Office: ${n} session${n > 1 ? 's' : ''} (${w} waiting, ${b} working, ${i} resting)` : 'Office: no running sessions'),
     allStatus: 'All statuses', allProjects: 'All projects', unknownProject: '(unknown)',
     working: 'Working', standby: 'Idle', fold: 'Collapse', unfold: 'Expand',
     teammate: 'Teammate', subagent: 'Subagent', tokens: (n) => `${n} tokens`,
@@ -65,4 +69,6 @@ const ACT_KEYS = { '@result': 'actResult', '@thinking': 'actThinking', '@writing
 const actText = (a) => (ACT_KEYS[a] ? tr(ACT_KEYS[a]) : a);
 document.documentElement.lang = LANG;
 document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = tr(el.dataset.i18n); });
-document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = tr(el.dataset.i18nTitle); });
+document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = tr(el.dataset.i18nTitle); if (el.tagName === 'BUTTON') el.setAttribute('aria-label', tr(el.dataset.i18nTitle)); });
+// Controls with no visible text get a spoken name.
+document.querySelectorAll('[data-i18n-label]').forEach((el) => { el.setAttribute('aria-label', tr(el.dataset.i18nLabel)); });
