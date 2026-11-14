@@ -153,7 +153,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     var server: Process?
     var baseURL: URL?
     var lastStatus: [String: String] = [:]
-    var busySince: [String: Date] = [:]
+    var busySince: [String: Date] = [:]     // start of the current working stretch
+    var busyTotal: [String: TimeInterval] = [:] // working stretches of the current turn that already ended (cut by approvals)
     var timer: Timer?
     let fetcher = UsageFetcher()
     var usageState = "login"            // ok, login, error
@@ -515,25 +516,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         // Logged only when it changes, so the log shows what the menu bar says and how many sessions auto clock-out sent home.
         if n != count || all != lastAllCount { writeLog("menu bar count \(n) (\(all - n) of \(all) clocked out, auto clock-out \(autoLeave)h)"); lastAllCount = all }
         count = n; refreshTitle()
+        let now = Date()
         for s in list {
-            let prev = lastStatus[s.sessionId]
-            if s.status == "busy", busySince[s.sessionId] == nil {
+            let id = s.sessionId, prev = lastStatus[id]
+            if s.status == "busy", busySince[id] == nil {
                 // Start from the time the session reported busy, so a session already working when the app launched is not under-counted.
-                var since = Date()
+                var since = now
                 if let ms = s.statusUpdatedAt, ms > 0 { let t = Date(timeIntervalSince1970: ms / 1000); if t < since { since = t } }
-                busySince[s.sessionId] = since
+                busySince[id] = since
             }
+            // A turn can stop for approval and then go on working. Only the working stretches are added up, so the time spent
+            // waiting for the user is not reported as work, and the work before the approval is not lost either.
+            if s.status != "busy", let since = busySince[id] { busyTotal[id, default: 0] += now.timeIntervalSince(since); busySince[id] = nil }
             if let prev, prev != s.status {
-                if s.status == "waiting" { notify(L("승인 요청", "Approval needed"), L("\(s.name): 확인이 필요합니다.", "\(s.name): needs your attention."), sessionId: s.sessionId) }
-                else if s.status == "idle", prev == "busy" {
-                    let secs = Int(Date().timeIntervalSince(busySince[s.sessionId] ?? Date()))
-                    if secs >= (s.parentId == nil ? minWorkSecs : minSubagentSecs) { notify(L("작업 완료", "Work finished"), L("\(s.name): \(secs / 60)분 \(secs % 60)초 동안 일했습니다.", "\(s.name): worked for \(secs / 60)m \(secs % 60)s."), sessionId: s.sessionId) }
+                if s.status == "waiting" { notify(L("승인 요청", "Approval needed"), L("\(s.name): 확인이 필요합니다.", "\(s.name): needs your attention."), sessionId: id, kind: "waiting") }
+                // The approval was answered (or the turn ended), so its notification no longer asks for anything.
+                if prev == "waiting" { clearApproval(id, reason: "\(s.name) is \(s.status)") }
+                if s.status == "idle", prev == "busy" {
+                    let secs = Int(busyTotal[id] ?? 0)
+                    if secs >= (s.parentId == nil ? minWorkSecs : minSubagentSecs) { notify(L("작업 완료", "Work finished"), L("\(s.name): \(secs / 60)분 \(secs % 60)초 동안 일했습니다.", "\(s.name): worked for \(secs / 60)m \(secs % 60)s."), sessionId: id, kind: "done") }
                 }
             }
-            if s.status != "busy" { busySince[s.sessionId] = nil }
-            lastStatus[s.sessionId] = s.status
+            if s.status == "idle" { busyTotal[id] = nil }
+            lastStatus[id] = s.status
         }
-        let ids = Set(list.map { $0.sessionId }); lastStatus = lastStatus.filter { ids.contains($0.key) }; busySince = busySince.filter { ids.contains($0.key) }
+        let ids = Set(list.map { $0.sessionId })
+        // A session that ended while it was waiting leaves no one to answer its approval notification.
+        for (id, st) in lastStatus where st == "waiting" && !ids.contains(id) { clearApproval(id, reason: "session \(id) ended") }
+        lastStatus = lastStatus.filter { ids.contains($0.key) }; busySince = busySince.filter { ids.contains($0.key) }; busyTotal = busyTotal.filter { ids.contains($0.key) }
     }
     // True when the current hour is inside the chosen quiet hours.
     func inQuietHours(_ now: Date = Date()) -> Bool {
@@ -542,13 +552,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let h = Calendar.current.component(.hour, from: now), a = parts[0], b = parts[1]
         return a <= b ? (h >= a && h < b) : (h >= a || h < b)
     }
-    func notify(_ title: String, _ body: String, sessionId: String) {
+    // Each session keeps at most one notification of each kind ("waiting" or "done"): a new one with the same identifier replaces
+    // the old one instead of piling up, and the session's notifications are grouped together in Notification Center.
+    func notify(_ title: String, _ body: String, sessionId: String, kind: String) {
         guard notifyEnabled else { writeLog("notification skipped (off): \(title)"); return }
         guard !inQuietHours() else { writeLog("notification skipped (quiet hours \(quietHours)): \(title)"); return }
         writeLog("notification sent: \(title) / \(body)")
         let c = UNMutableNotificationContent(); c.title = title; c.body = body; c.sound = .default
         c.userInfo = ["sessionId": sessionId]
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil))
+        c.threadIdentifier = sessionId
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "\(kind):\(sessionId)", content: c, trigger: nil)) { [weak self] e in
+            if let e { writeLog("notification failed: \(e.localizedDescription)") } else { self?.logDelivered(sessionId, after: "sent \(kind)") }
+        }
+    }
+    func clearApproval(_ sessionId: String, reason: String) {
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["waiting:\(sessionId)"])
+        logDelivered(sessionId, after: "approval cleared (\(reason))")
+    }
+    // Logs which notifications of the session are still in Notification Center. Removal finishes asynchronously, so it looks a moment later.
+    func logDelivered(_ sessionId: String, after what: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            UNUserNotificationCenter.current().getDeliveredNotifications { list in
+                let mine = list.filter { $0.request.content.threadIdentifier == sessionId }.map { $0.request.identifier.components(separatedBy: ":").first ?? "" }
+                writeLog("notifications for \(sessionId) after \(what): [\(mine.joined(separator: ", "))]")
+            }
+        }
     }
     // Show banners even while the app is in front, and jump to the session's terminal when a notification is clicked.
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void) {
