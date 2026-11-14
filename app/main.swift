@@ -55,6 +55,7 @@ final class DragStrip: NSView {
 final class UsageFetcher: NSObject, WKNavigationDelegate {
     let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 10, height: 10), configuration: WKWebViewConfiguration())
     private var ready = false, loading = false
+    private var lastNote = ""           // which organization answered last time, logged only when it changes
     private var pending: [(Result<String, Error>) -> Void] = []
     override init() { super.init(); web.navigationDelegate = self }
 
@@ -76,11 +77,20 @@ final class UsageFetcher: NSObject, WKNavigationDelegate {
         try {
           const o = await get('/api/organizations');
           if (o.status !== 200) return JSON.stringify({ status: o.status, step: 'organizations', msg: why(o) });
-          const org = (Array.isArray(o.json) ? o.json : []).find((x) => x && x.uuid);
-          if (!org) return JSON.stringify({ status: 401, step: 'organizations', msg: 'no-org' });
-          const u = await get('/api/organizations/' + org.uuid + '/usage');
-          if (u.status !== 200) return JSON.stringify({ status: u.status, step: 'usage', msg: why(u) });
-          return JSON.stringify({ status: 200, data: u.json });
+          const orgs = (Array.isArray(o.json) ? o.json : []).filter((x) => x && x.uuid);
+          if (!orgs.length) return JSON.stringify({ status: 401, step: 'organizations', msg: 'no-org' });
+          // An account can belong to several organizations, and some of them (a team or enterprise seat, for example) refuse the usage request.
+          // Try the organization claude.ai last had open first (its lastActiveOrg cookie), then the others, and use the first one that answers.
+          const active = (document.cookie.match(/(?:^|;\\s*)lastActiveOrg=([^;]+)/) || [])[1] || '';
+          orgs.sort((a, b) => (b.uuid === active) - (a.uuid === active));
+          const tried = [];
+          let last = null;
+          for (const org of orgs) {
+            last = await get('/api/organizations/' + org.uuid + '/usage');
+            if (last.status === 200) return JSON.stringify({ status: 200, data: last.json, note: 'org ' + (tried.length + 1) + '/' + orgs.length + (org.uuid === active ? ' (active)' : '') });
+            tried.push(last.status + (why(last) ? ' ' + why(last) : ''));
+          }
+          return JSON.stringify({ status: last.status, step: 'usage', msg: orgs.length + ' org(s), active cookie ' + (active ? 'found' : 'missing') + ': ' + tried.join('; ') });
         } catch (e) { return JSON.stringify({ status: 0, step: 'fetch', msg: String(e) }); }
         """
         func err(_ m: String) -> NSError { NSError(domain: "usage", code: 1, userInfo: [NSLocalizedDescriptionKey: m]) }
@@ -89,7 +99,10 @@ final class UsageFetcher: NSObject, WKNavigationDelegate {
             case .success(let v):
                 guard let s = v as? String, let d = s.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { done(.failure(err("empty response"))); return }
                 let status = o["status"] as? Int ?? 0
-                if status == 200, let data = o["data"], let out = try? JSONSerialization.data(withJSONObject: data), let text = String(data: out, encoding: .utf8) { done(.success(text)) }
+                if status == 200, let data = o["data"], let out = try? JSONSerialization.data(withJSONObject: data), let text = String(data: out, encoding: .utf8) {
+                    if let note = o["note"] as? String, note != self.lastNote { self.lastNote = note; writeLog("usage read from \(note)") }
+                    done(.success(text))
+                }
                 else { done(.failure(err("HTTP \(status) \(o["step"] as? String ?? "") \(o["msg"] as? String ?? "")"))) }
             case .failure(let e):
                 let m = (e as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String ?? e.localizedDescription
@@ -118,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     var usageFailures = 0
     var usageNextTry = Date.distantPast
     var lastUsageError = ""
+    var usageGen = 0                    // bumped on logout, so results of fetches started before it are ignored
     let d = UserDefaults.standard
 
     // Server supervision: the server is restarted with a growing delay when it exits unexpectedly.
@@ -193,6 +207,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let login = NSMenuItem(title: L("로그인할 때 열기", "Open at Login"), action: #selector(toggleLogin(_:)), keyEquivalent: "")
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off; m.addItem(login)
         m.addItem(.separator())
+        // claude.ai account used for the usage meters: log in when there is no valid login, log out otherwise.
+        if usageState == "login" { m.addItem(withTitle: L("claude.ai 로그인…", "Log In to claude.ai…"), action: #selector(openLogin), keyEquivalent: "") }
+        else { m.addItem(withTitle: L("claude.ai 로그아웃", "Log Out of claude.ai"), action: #selector(logoutClaude), keyEquivalent: "") }
+        m.addItem(.separator())
         m.addItem(withTitle: L("종료", "Quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = m
         NSApp.mainMenu = { let mm = NSMenu(); let it = NSMenuItem(); mm.addItem(it); let sub = NSMenu(); sub.addItem(withTitle: L("종료", "Quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"); it.submenu = sub; return mm }()
@@ -250,9 +268,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
     func refreshUsage(fromLogin: Bool = false) {
         if !fromLogin, Date() < usageNextTry { return }
+        let gen = usageGen
         fetcher.fetch { [weak self] r in
             DispatchQueue.main.async {
-                guard let self else { return }
+                // A fetch that started before a logout must not bring back the old login state.
+                guard let self, gen == self.usageGen else { return }
                 switch r {
                 case .success(let json):
                     // Parse the raw response once and serialize it again, so only clean JSON reaches the UI.
@@ -271,10 +291,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                     // Periodic attempts are already spaced out by the backoff, so each one is logged with the wait before the next.
                     if !fromLogin || m != self.lastUsageError { writeLog("usage fetch failed (#\(self.usageFailures), next try in \(Int(self.usageNextTry.timeIntervalSinceNow.rounded()))s): \(m)") }
                     self.lastUsageError = m
-                    let needLogin = m.contains("401") || m.contains("403")
+                    // Only a refused login (401, or 403 on the organization list) means logging in again would help.
+                    // A 403 on the usage request comes from a valid login whose organizations do not allow it, so it is an error, not a login prompt.
+                    let needLogin = m.hasPrefix("HTTP 401") || m.hasPrefix("HTTP 403 organizations")
                     let next = needLogin ? "login" : "error"
                     if self.usageState != next { self.usageState = next; self.buildMenu() }
                     if needLogin { self.appFive = nil; self.lastUsageJSON = nil }
+                    // The usage request got past the organization list, so the login itself worked: close the login window instead of retrying forever.
+                    if fromLogin, m.hasPrefix("HTTP 403 usage") { self.loginWin?.close() }
                     self.pushUsage(); self.refreshTitle()
                 }
             }
@@ -298,12 +322,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         // Once login completes the usage request succeeds, so retry every 3 seconds while the window is open and close it on success.
         loginTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.refreshUsage(fromLogin: true) }
     }
+    // Removes the claude.ai and anthropic.com cookies and site data from the shared web data store, which logs the usage fetcher out.
     @objc func logoutClaude() {
+        usageGen += 1
         let store = WKWebsiteDataStore.default(), types = WKWebsiteDataStore.allWebsiteDataTypes()
-        store.fetchDataRecords(ofTypes: types) { recs in
+        store.fetchDataRecords(ofTypes: types) { [weak self] recs in
             let mine = recs.filter { $0.displayName.contains("claude.ai") || $0.displayName.contains("anthropic.com") }
-            store.removeData(ofTypes: types, for: mine) {
-                DispatchQueue.main.async { self.usageState = "login"; self.appFive = nil; self.lastUsageJSON = nil; self.buildMenu(); self.pushUsage(); self.refreshTitle() }
+            store.removeData(ofTypes: types, for: mine) { [weak self] in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    writeLog("logged out of claude.ai (\(mine.count) site data records removed)")
+                    self.usageGen += 1 // also drop fetches that started while the data was being removed
+                    self.usageState = "login"; self.appFive = nil; self.lastUsageJSON = nil
+                    self.usageFailures = 0; self.usageNextTry = .distantPast; self.lastUsageError = ""
+                    self.buildMenu(); self.pushUsage(); self.refreshTitle()
+                }
             }
         }
     }
