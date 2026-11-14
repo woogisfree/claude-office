@@ -172,6 +172,12 @@ Run the tests (Node's built-in runner, no installation needed). They cover token
 npm test
 ```
 
+To try how the app handles claude.ai usage failures (a lost login, a refused organization, a server error), run a local server that answers `/api/organizations` and `/api/organizations/<uuid>/usage`, and start the built app with its address. Only `http://127.0.0.1` and `http://localhost` addresses are accepted, and the result of each fetch is written to `~/Library/Logs/Claude Office.log`.
+
+```bash
+CLAUDE_OFFICE_USAGE_ORIGIN=http://127.0.0.1:47123 "build/Claude Office.app/Contents/MacOS/ClaudeOffice"
+```
+
 ## License
 
 [MIT](LICENSE)

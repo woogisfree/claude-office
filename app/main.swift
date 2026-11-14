@@ -51,26 +51,60 @@ final class DragStrip: NSView {
     }
 }
 
+// Why a usage fetch failed. The decisions below read these values directly, so rewording a log message cannot change what the app does.
+enum UsageError: Error {
+    case http(status: Int, step: String, msg: String)   // the usage script got an answer; step is "organizations", "usage", or "fetch"
+    case other(String)                                   // the page did not load, the script threw, or the answer was unreadable
+
+    // Only a refused login (401, or 403 on the organization list) means logging in again would help.
+    var needsLogin: Bool {
+        switch self {
+        case .http(401, _, _), .http(403, "organizations", _): return true
+        default: return false
+        }
+    }
+    // A 403 on the usage request comes from a valid login whose organizations do not allow it: logging in worked, but usage stays unavailable.
+    var loginAccepted: Bool {
+        if case .http(403, "usage", _) = self { return true }
+        return false
+    }
+    var message: String {
+        switch self {
+        case let .http(status, step, msg): return "HTTP \(status) \(step) \(msg)"
+        case let .other(m): return m
+        }
+    }
+}
+
 // Fetches usage with the claude.ai login cookie (WKWebsiteDataStore.default). The app never handles the password; the user logs in on the claude.ai page.
 // The usage API is not a public spec, so the raw JSON response is passed straight to the UI, and panel.js interprets it loosely.
 final class UsageFetcher: NSObject, WKNavigationDelegate {
     let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 10, height: 10), configuration: WKWebViewConfiguration())
     private var ready = false, loading = false
     private var lastNote = ""           // which organization answered last time, logged only when it changes
-    private var pending: [(Result<String, Error>) -> Void] = []
+    private var pending: [(Result<String, UsageError>) -> Void] = []
+    // For testing the failure handling: CLAUDE_OFFICE_USAGE_ORIGIN=http://127.0.0.1:<port> sends the usage requests to a local stand-in
+    // for claude.ai. Only loopback addresses are accepted, so the login cookie can never be sent to another host this way.
+    static let origin: String = {
+        if let o = ProcessInfo.processInfo.environment["CLAUDE_OFFICE_USAGE_ORIGIN"], let u = URL(string: o), u.scheme == "http", ["127.0.0.1", "localhost"].contains(u.host ?? "") {
+            writeLog("usage requests go to \(o) (CLAUDE_OFFICE_USAGE_ORIGIN)")
+            return o
+        }
+        return "https://claude.ai"
+    }()
     override init() { super.init(); web.navigationDelegate = self }
 
-    func fetch(_ done: @escaping (Result<String, Error>) -> Void) {
+    func fetch(_ done: @escaping (Result<String, UsageError>) -> Void) {
         if ready { run(done); return }
         pending.append(done)
-        if !loading { loading = true; web.load(URLRequest(url: URL(string: "https://claude.ai/favicon.ico")!)) }
+        if !loading { loading = true; web.load(URLRequest(url: URL(string: UsageFetcher.origin + "/favicon.ico")!)) }
     }
     func webView(_ w: WKWebView, didFinish n: WKNavigation!) { ready = true; loading = false; let p = pending; pending = []; p.forEach { run($0) } }
     func webView(_ w: WKWebView, didFail n: WKNavigation!, withError e: Error) { fail(e) }
     func webView(_ w: WKWebView, didFailProvisionalNavigation n: WKNavigation!, withError e: Error) { fail(e) }
-    private func fail(_ e: Error) { loading = false; ready = false; let p = pending; pending = []; p.forEach { $0(.failure(e)) } }
+    private func fail(_ e: Error) { loading = false; ready = false; let p = pending; pending = []; p.forEach { $0(.failure(.other("page load failed: \(e.localizedDescription)"))) } }
 
-    private func run(_ done: @escaping (Result<String, Error>) -> Void) {
+    private func run(_ done: @escaping (Result<String, UsageError>) -> Void) {
         // Return JSON that carries the status code instead of throwing. (A thrown exception only shows a generic message in Swift, so the cause is lost.)
         let js = """
         const get = async (u) => { const r = await fetch(u, { credentials: 'include' }); const t = await r.text(); let j = null; try { j = JSON.parse(t); } catch (e) {} return { status: r.status, json: j }; };
@@ -94,20 +128,19 @@ final class UsageFetcher: NSObject, WKNavigationDelegate {
           return JSON.stringify({ status: last.status, step: 'usage', msg: orgs.length + ' org(s), active cookie ' + (active ? 'found' : 'missing') + ': ' + tried.join('; ') });
         } catch (e) { return JSON.stringify({ status: 0, step: 'fetch', msg: String(e) }); }
         """
-        func err(_ m: String) -> NSError { NSError(domain: "usage", code: 1, userInfo: [NSLocalizedDescriptionKey: m]) }
         web.callAsyncJavaScript(js, arguments: [:], in: nil, in: .page) { r in
             switch r {
             case .success(let v):
-                guard let s = v as? String, let d = s.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { done(.failure(err("empty response"))); return }
+                guard let s = v as? String, let d = s.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { done(.failure(.other("empty response"))); return }
                 let status = o["status"] as? Int ?? 0
                 if status == 200, let data = o["data"], let out = try? JSONSerialization.data(withJSONObject: data), let text = String(data: out, encoding: .utf8) {
                     if let note = o["note"] as? String, note != self.lastNote { self.lastNote = note; writeLog("usage read from \(note)") }
                     done(.success(text))
                 }
-                else { done(.failure(err("HTTP \(status) \(o["step"] as? String ?? "") \(o["msg"] as? String ?? "")"))) }
+                else { done(.failure(.http(status: status, step: o["step"] as? String ?? "", msg: o["msg"] as? String ?? ""))) }
             case .failure(let e):
                 let m = (e as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String ?? e.localizedDescription
-                done(.failure(err("JS exception: \(m)")))
+                done(.failure(.other("JS exception: \(m)")))
             }
         }
     }
@@ -286,20 +319,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                     self.pushUsage(); self.refreshTitle()
                     if fromLogin { self.loginWin?.close() }
                 case .failure(let e):
-                    let m = e.localizedDescription
+                    let m = e.message
+                    let needLogin = e.needsLogin
+                    let next = needLogin ? "login" : "error"
                     self.noteUsageFailure()
                     // The login window retries every 3 seconds with the same error, so there a message is logged only when it changes.
                     // Periodic attempts are already spaced out by the backoff, so each one is logged with the wait before the next.
-                    if !fromLogin || m != self.lastUsageError { writeLog("usage fetch failed (#\(self.usageFailures), next try in \(Int(self.usageNextTry.timeIntervalSinceNow.rounded()))s): \(m)") }
+                    if !fromLogin || m != self.lastUsageError { writeLog("usage fetch failed (#\(self.usageFailures), next try in \(Int(self.usageNextTry.timeIntervalSinceNow.rounded()))s): \(m) -> \(next)") }
                     self.lastUsageError = m
-                    // Only a refused login (401, or 403 on the organization list) means logging in again would help.
-                    // A 403 on the usage request comes from a valid login whose organizations do not allow it, so it is an error, not a login prompt.
-                    let needLogin = m.hasPrefix("HTTP 401") || m.hasPrefix("HTTP 403 organizations")
-                    let next = needLogin ? "login" : "error"
                     if self.usageState != next { self.usageState = next; self.buildMenu() }
                     if needLogin { self.appFive = nil; self.lastUsageJSON = nil }
                     // The usage request got past the organization list, so the login itself worked: close the login window instead of retrying forever.
-                    if fromLogin, m.hasPrefix("HTTP 403 usage") { self.loginWin?.close() }
+                    if fromLogin, e.loginAccepted { self.loginWin?.close() }
                     self.pushUsage(); self.refreshTitle()
                 }
             }
