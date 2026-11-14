@@ -3,6 +3,7 @@ import Cocoa
 import WebKit
 import UserNotifications
 import ServiceManagement
+import JavaScriptCore
 
 // Use the Korean text when the system language is Korean, and the English text otherwise.
 let isKorean = (Locale.preferredLanguages.first ?? "en").hasPrefix("ko")
@@ -217,7 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
     @objc func pickTheme(_ s: NSMenuItem) { d.set(s.representedObject as? String, forKey: "theme"); buildMenu(); pushSettings() }
     @objc func pickCity(_ s: NSMenuItem) { d.set(s.representedObject as? String, forKey: "city"); buildMenu(); pushSettings() }
-    @objc func pickAutoLeave(_ s: NSMenuItem) { d.set(s.representedObject as? Int ?? 0, forKey: "autoLeave"); buildMenu(); pushSettings() }
+    @objc func pickAutoLeave(_ s: NSMenuItem) { d.set(s.representedObject as? Int ?? 0, forKey: "autoLeave"); buildMenu(); pushSettings(); tick() }
     @objc func pickZoom(_ s: NSMenuItem) { d.set(s.representedObject as? String, forKey: "zoom"); buildMenu(); pushSettings() }
     @objc func toggleNotify(_ s: NSMenuItem) { d.set(!notifyEnabled, forKey: "notify"); buildMenu() }
     @objc func pickQuiet(_ s: NSMenuItem) { d.set(s.representedObject as? String, forKey: "quiet"); buildMenu() }
@@ -439,7 +440,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         guard let base = baseURL else { return }
         URLSession.shared.dataTask(with: base.appendingPathComponent("api/sessions")) { [weak self] data, _, _ in
             guard let self, let data, let list = try? JSONDecoder().decode([Session].self, from: data) else { return }
-            DispatchQueue.main.async { self.handle(list) }
+            let raw = String(data: data, encoding: .utf8) ?? "[]"
+            DispatchQueue.main.async { self.handle(list, raw: raw) }
         }.resume()
         URLSession.shared.dataTask(with: base.appendingPathComponent("api/usage")) { [weak self] data, _, _ in
             guard let self, let data, let u = try? JSONDecoder().decode(Usage.self, from: data) else { return }
@@ -448,6 +450,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
     var usage: Usage?
     var count = 0
+    var lastAllCount = -1
     func refreshTitle() {
         if serverDown { statusItem.button?.title = "⚠️"; return }
         var t = statusItem.button?.image == nil ? "🏢 \(count)" : " \(count)"
@@ -455,8 +458,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         else if let u = usage, u.ok, let f = u.fiveHour { t += " · \(max(0, 100 - Int(f.pct.rounded())))% \(L("남음", "left"))" }
         statusItem.button?.title = t
     }
-    func handle(_ list: [Session]) {
-        count = list.filter { $0.parentId == nil }.count; refreshTitle()
+    // Auto clock-out is decided by autoleave.js, the same file the office view uses. Running it here in JavaScriptCore keeps
+    // the menu bar count equal to the employees in the office, without a second copy of the rule that could drift apart.
+    lazy var leaveJS: JSContext? = {
+        guard let res = Bundle.main.resourcePath,
+              let src = try? String(contentsOfFile: (res as NSString).appendingPathComponent("server/public/autoleave.js"), encoding: .utf8),
+              let ctx = JSContext() else { writeLog("autoleave.js not loaded; the menu bar counts every session"); return nil }
+        ctx.evaluateScript(src)
+        ctx.evaluateScript("function presentParents(json, hours) { return splitGone(JSON.parse(json), hours).present.filter(function (s) { return !s.parentId; }).length; }")
+        if let e = ctx.exception { writeLog("autoleave.js failed: \(e)"); return nil }
+        return ctx
+    }()
+    // Sessions still in the office (not clocked out). Falls back to every top-level session when the script cannot run.
+    func officeCount(_ list: [Session], raw: String) -> Int {
+        let all = list.filter { $0.parentId == nil }.count
+        guard autoLeave > 0, let ctx = leaveJS, let f = ctx.objectForKeyedSubscript("presentParents") else { return all }
+        let v = f.call(withArguments: [raw, autoLeave])
+        if let e = ctx.exception { ctx.exception = nil; writeLog("autoleave count failed: \(e)"); return all }
+        guard let v, v.isNumber else { return all }
+        return Int(v.toInt32())
+    }
+    func handle(_ list: [Session], raw: String) {
+        let n = officeCount(list, raw: raw)
+        let all = list.filter { $0.parentId == nil }.count
+        // Logged only when it changes, so the log shows what the menu bar says and how many sessions auto clock-out sent home.
+        if n != count || all != lastAllCount { writeLog("menu bar count \(n) (\(all - n) of \(all) clocked out, auto clock-out \(autoLeave)h)"); lastAllCount = all }
+        count = n; refreshTitle()
         for s in list {
             let prev = lastStatus[s.sessionId]
             if s.status == "busy", busySince[s.sessionId] == nil {
