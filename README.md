@@ -104,8 +104,38 @@ These are estimates read from local files, not billing figures.
 
 The remaining percentage of the 5-hour and weekly limits is read from two sources:
 
-1. The cache file written by the Claude Code status line script (`~/.claude/.statusline-ratelimit-cache`).
+1. A cache file, `~/.claude/.statusline-ratelimit-cache`, that your Claude Code [status line](https://code.claude.com/docs/en/statusline) script writes. Claude Code does not create this file by itself, so add the snippet below to your script.
 2. claude.ai's internal usage API, called with the session you create through **claude.ai login** in the menu.
+
+### Writing the cache from your status line
+
+Claude Code passes the status line script a JSON object on stdin, and its `rate_limits` field holds the 5-hour and 7-day usage. Add these lines to your status line script (they need [`jq`](https://jqlang.org)). If your script has no `input` variable yet, read stdin once at the top with `input=$(cat)`.
+
+```bash
+# Claude Office: save the 5-hour and weekly usage as "pct|resets_at|pct|resets_at".
+five_pct=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
+five_reset=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty')
+week_pct=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty')
+week_reset=$(echo "$input" | jq -r '.rate_limits.seven_day.resets_at // empty')
+if [ -n "$five_pct$week_pct" ]; then
+  cache="$HOME/.claude/.statusline-ratelimit-cache"
+  # Write to a temporary file and rename it, so the app never reads a half-written line.
+  printf '%s|%s|%s|%s\n' "$five_pct" "$five_reset" "$week_pct" "$week_reset" > "$cache.tmp.$$" && mv -f "$cache.tmp.$$" "$cache"
+fi
+```
+
+If you have no status line yet, save the lines above with `input=$(cat)` on top as `~/.claude/statusline-command.sh`, and point `statusLine` in `~/.claude/settings.json` at it:
+
+```json
+"statusLine": { "type": "command", "command": "bash ~/.claude/statusline-command.sh" }
+```
+
+Limits of this source:
+
+- According to the status line docs, `rate_limits` is only sent to claude.ai Pro, Max, and Ultra subscribers. On other plans or with an API key the file is never written, and the claude.ai usage API below is the only source.
+- It appears only after the first API response in a session, and the file is updated only while some session's status line runs.
+
+### claude.ai usage API
 
 The second source is an **unofficial endpoint that is not in any official documentation**. It may change or stop working without notice, and you use it at your own risk. The login cookie is stored only in the app's WebKit storage and is never sent anywhere else. **Log out** in the menu deletes it. If a fetch fails, the last value stays visible, dimmed, with how long ago it was read.
 
