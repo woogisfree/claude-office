@@ -3,6 +3,7 @@ import Cocoa
 import WebKit
 import UserNotifications
 import ServiceManagement
+import JavaScriptCore
 
 // Use the Korean text when the system language is Korean, and the English text otherwise.
 let isKorean = (Locale.preferredLanguages.first ?? "en").hasPrefix("ko")
@@ -50,25 +51,60 @@ final class DragStrip: NSView {
     }
 }
 
+// Why a usage fetch failed. The decisions below read these values directly, so rewording a log message cannot change what the app does.
+enum UsageError: Error {
+    case http(status: Int, step: String, msg: String)   // the usage script got an answer; step is "organizations", "usage", or "fetch"
+    case other(String)                                   // the page did not load, the script threw, or the answer was unreadable
+
+    // Only a refused login (401, or 403 on the organization list) means logging in again would help.
+    var needsLogin: Bool {
+        switch self {
+        case .http(401, _, _), .http(403, "organizations", _): return true
+        default: return false
+        }
+    }
+    // A 403 on the usage request comes from a valid login whose organizations do not allow it: logging in worked, but usage stays unavailable.
+    var loginAccepted: Bool {
+        if case .http(403, "usage", _) = self { return true }
+        return false
+    }
+    var message: String {
+        switch self {
+        case let .http(status, step, msg): return "HTTP \(status) \(step) \(msg)"
+        case let .other(m): return m
+        }
+    }
+}
+
 // Fetches usage with the claude.ai login cookie (WKWebsiteDataStore.default). The app never handles the password; the user logs in on the claude.ai page.
 // The usage API is not a public spec, so the raw JSON response is passed straight to the UI, and panel.js interprets it loosely.
 final class UsageFetcher: NSObject, WKNavigationDelegate {
     let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 10, height: 10), configuration: WKWebViewConfiguration())
     private var ready = false, loading = false
-    private var pending: [(Result<String, Error>) -> Void] = []
+    private var lastNote = ""           // which organization answered last time, logged only when it changes
+    private var pending: [(Result<String, UsageError>) -> Void] = []
+    // For testing the failure handling: CLAUDE_OFFICE_USAGE_ORIGIN=http://127.0.0.1:<port> sends the usage requests to a local stand-in
+    // for claude.ai. Only loopback addresses are accepted, so the login cookie can never be sent to another host this way.
+    static let origin: String = {
+        if let o = ProcessInfo.processInfo.environment["CLAUDE_OFFICE_USAGE_ORIGIN"], let u = URL(string: o), u.scheme == "http", ["127.0.0.1", "localhost"].contains(u.host ?? "") {
+            writeLog("usage requests go to \(o) (CLAUDE_OFFICE_USAGE_ORIGIN)")
+            return o
+        }
+        return "https://claude.ai"
+    }()
     override init() { super.init(); web.navigationDelegate = self }
 
-    func fetch(_ done: @escaping (Result<String, Error>) -> Void) {
+    func fetch(_ done: @escaping (Result<String, UsageError>) -> Void) {
         if ready { run(done); return }
         pending.append(done)
-        if !loading { loading = true; web.load(URLRequest(url: URL(string: "https://claude.ai/favicon.ico")!)) }
+        if !loading { loading = true; web.load(URLRequest(url: URL(string: UsageFetcher.origin + "/favicon.ico")!)) }
     }
     func webView(_ w: WKWebView, didFinish n: WKNavigation!) { ready = true; loading = false; let p = pending; pending = []; p.forEach { run($0) } }
     func webView(_ w: WKWebView, didFail n: WKNavigation!, withError e: Error) { fail(e) }
     func webView(_ w: WKWebView, didFailProvisionalNavigation n: WKNavigation!, withError e: Error) { fail(e) }
-    private func fail(_ e: Error) { loading = false; ready = false; let p = pending; pending = []; p.forEach { $0(.failure(e)) } }
+    private func fail(_ e: Error) { loading = false; ready = false; let p = pending; pending = []; p.forEach { $0(.failure(.other("page load failed: \(e.localizedDescription)"))) } }
 
-    private func run(_ done: @escaping (Result<String, Error>) -> Void) {
+    private func run(_ done: @escaping (Result<String, UsageError>) -> Void) {
         // Return JSON that carries the status code instead of throwing. (A thrown exception only shows a generic message in Swift, so the cause is lost.)
         let js = """
         const get = async (u) => { const r = await fetch(u, { credentials: 'include' }); const t = await r.text(); let j = null; try { j = JSON.parse(t); } catch (e) {} return { status: r.status, json: j }; };
@@ -76,24 +112,35 @@ final class UsageFetcher: NSObject, WKNavigationDelegate {
         try {
           const o = await get('/api/organizations');
           if (o.status !== 200) return JSON.stringify({ status: o.status, step: 'organizations', msg: why(o) });
-          const org = (Array.isArray(o.json) ? o.json : []).find((x) => x && x.uuid);
-          if (!org) return JSON.stringify({ status: 401, step: 'organizations', msg: 'no-org' });
-          const u = await get('/api/organizations/' + org.uuid + '/usage');
-          if (u.status !== 200) return JSON.stringify({ status: u.status, step: 'usage', msg: why(u) });
-          return JSON.stringify({ status: 200, data: u.json });
+          const orgs = (Array.isArray(o.json) ? o.json : []).filter((x) => x && x.uuid);
+          if (!orgs.length) return JSON.stringify({ status: 401, step: 'organizations', msg: 'no-org' });
+          // An account can belong to several organizations, and some of them (a team or enterprise seat, for example) refuse the usage request.
+          // Try the organization claude.ai last had open first (its lastActiveOrg cookie), then the others, and use the first one that answers.
+          const active = (document.cookie.match(/(?:^|;\\s*)lastActiveOrg=([^;]+)/) || [])[1] || '';
+          orgs.sort((a, b) => (b.uuid === active) - (a.uuid === active));
+          const tried = [];
+          let last = null;
+          for (const org of orgs) {
+            last = await get('/api/organizations/' + org.uuid + '/usage');
+            if (last.status === 200) return JSON.stringify({ status: 200, data: last.json, note: 'org ' + (tried.length + 1) + '/' + orgs.length + (org.uuid === active ? ' (active)' : '') });
+            tried.push(last.status + (why(last) ? ' ' + why(last) : ''));
+          }
+          return JSON.stringify({ status: last.status, step: 'usage', msg: orgs.length + ' org(s), active cookie ' + (active ? 'found' : 'missing') + ': ' + tried.join('; ') });
         } catch (e) { return JSON.stringify({ status: 0, step: 'fetch', msg: String(e) }); }
         """
-        func err(_ m: String) -> NSError { NSError(domain: "usage", code: 1, userInfo: [NSLocalizedDescriptionKey: m]) }
         web.callAsyncJavaScript(js, arguments: [:], in: nil, in: .page) { r in
             switch r {
             case .success(let v):
-                guard let s = v as? String, let d = s.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { done(.failure(err("empty response"))); return }
+                guard let s = v as? String, let d = s.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { done(.failure(.other("empty response"))); return }
                 let status = o["status"] as? Int ?? 0
-                if status == 200, let data = o["data"], let out = try? JSONSerialization.data(withJSONObject: data), let text = String(data: out, encoding: .utf8) { done(.success(text)) }
-                else { done(.failure(err("HTTP \(status) \(o["step"] as? String ?? "") \(o["msg"] as? String ?? "")"))) }
+                if status == 200, let data = o["data"], let out = try? JSONSerialization.data(withJSONObject: data), let text = String(data: out, encoding: .utf8) {
+                    if let note = o["note"] as? String, note != self.lastNote { self.lastNote = note; writeLog("usage read from \(note)") }
+                    done(.success(text))
+                }
+                else { done(.failure(.http(status: status, step: o["step"] as? String ?? "", msg: o["msg"] as? String ?? ""))) }
             case .failure(let e):
                 let m = (e as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String ?? e.localizedDescription
-                done(.failure(err("JS exception: \(m)")))
+                done(.failure(.other("JS exception: \(m)")))
             }
         }
     }
@@ -106,7 +153,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     var server: Process?
     var baseURL: URL?
     var lastStatus: [String: String] = [:]
-    var busySince: [String: Date] = [:]
+    var busySince: [String: Date] = [:]     // start of the current working stretch
+    var busyTotal: [String: TimeInterval] = [:] // working stretches of the current turn that already ended (cut by approvals)
     var timer: Timer?
     let fetcher = UsageFetcher()
     var usageState = "login"            // ok, login, error
@@ -118,6 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     var usageFailures = 0
     var usageNextTry = Date.distantPast
     var lastUsageError = ""
+    var usageGen = 0                    // bumped on logout, so results of fetches started before it are ignored
     let d = UserDefaults.standard
 
     // Server supervision: the server is restarted with a growing delay when it exits unexpectedly.
@@ -193,13 +242,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let login = NSMenuItem(title: L("로그인할 때 열기", "Open at Login"), action: #selector(toggleLogin(_:)), keyEquivalent: "")
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off; m.addItem(login)
         m.addItem(.separator())
+        // claude.ai account used for the usage meters: log in when there is no valid login, log out otherwise.
+        if usageState == "login" { m.addItem(withTitle: L("claude.ai 로그인…", "Log In to claude.ai…"), action: #selector(openLogin), keyEquivalent: "") }
+        else { m.addItem(withTitle: L("claude.ai 로그아웃", "Log Out of claude.ai"), action: #selector(logoutClaude), keyEquivalent: "") }
+        m.addItem(.separator())
         m.addItem(withTitle: L("종료", "Quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = m
         NSApp.mainMenu = { let mm = NSMenu(); let it = NSMenuItem(); mm.addItem(it); let sub = NSMenu(); sub.addItem(withTitle: L("종료", "Quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"); it.submenu = sub; return mm }()
     }
     @objc func pickTheme(_ s: NSMenuItem) { d.set(s.representedObject as? String, forKey: "theme"); buildMenu(); pushSettings() }
     @objc func pickCity(_ s: NSMenuItem) { d.set(s.representedObject as? String, forKey: "city"); buildMenu(); pushSettings() }
-    @objc func pickAutoLeave(_ s: NSMenuItem) { d.set(s.representedObject as? Int ?? 0, forKey: "autoLeave"); buildMenu(); pushSettings() }
+    @objc func pickAutoLeave(_ s: NSMenuItem) { d.set(s.representedObject as? Int ?? 0, forKey: "autoLeave"); buildMenu(); pushSettings(); tick() }
     @objc func pickZoom(_ s: NSMenuItem) { d.set(s.representedObject as? String, forKey: "zoom"); buildMenu(); pushSettings() }
     @objc func toggleNotify(_ s: NSMenuItem) { d.set(!notifyEnabled, forKey: "notify"); buildMenu() }
     @objc func pickQuiet(_ s: NSMenuItem) { d.set(s.representedObject as? String, forKey: "quiet"); buildMenu() }
@@ -250,9 +303,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
     func refreshUsage(fromLogin: Bool = false) {
         if !fromLogin, Date() < usageNextTry { return }
+        let gen = usageGen
         fetcher.fetch { [weak self] r in
             DispatchQueue.main.async {
-                guard let self else { return }
+                // A fetch that started before a logout must not bring back the old login state.
+                guard let self, gen == self.usageGen else { return }
                 switch r {
                 case .success(let json):
                     // Parse the raw response once and serialize it again, so only clean JSON reaches the UI.
@@ -265,16 +320,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                     self.pushUsage(); self.refreshTitle()
                     if fromLogin { self.loginWin?.close() }
                 case .failure(let e):
-                    let m = e.localizedDescription
+                    let m = e.message
+                    let needLogin = e.needsLogin
+                    let next = needLogin ? "login" : "error"
                     self.noteUsageFailure()
                     // The login window retries every 3 seconds with the same error, so there a message is logged only when it changes.
                     // Periodic attempts are already spaced out by the backoff, so each one is logged with the wait before the next.
-                    if !fromLogin || m != self.lastUsageError { writeLog("usage fetch failed (#\(self.usageFailures), next try in \(Int(self.usageNextTry.timeIntervalSinceNow.rounded()))s): \(m)") }
+                    if !fromLogin || m != self.lastUsageError { writeLog("usage fetch failed (#\(self.usageFailures), next try in \(Int(self.usageNextTry.timeIntervalSinceNow.rounded()))s): \(m) -> \(next)") }
                     self.lastUsageError = m
-                    let needLogin = m.contains("401") || m.contains("403")
-                    let next = needLogin ? "login" : "error"
                     if self.usageState != next { self.usageState = next; self.buildMenu() }
                     if needLogin { self.appFive = nil; self.lastUsageJSON = nil }
+                    // The usage request got past the organization list, so the login itself worked: close the login window instead of retrying forever.
+                    if fromLogin, e.loginAccepted { self.loginWin?.close() }
                     self.pushUsage(); self.refreshTitle()
                 }
             }
@@ -298,12 +355,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         // Once login completes the usage request succeeds, so retry every 3 seconds while the window is open and close it on success.
         loginTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.refreshUsage(fromLogin: true) }
     }
+    // Removes the claude.ai and anthropic.com cookies and site data from the shared web data store, which logs the usage fetcher out.
     @objc func logoutClaude() {
+        usageGen += 1
         let store = WKWebsiteDataStore.default(), types = WKWebsiteDataStore.allWebsiteDataTypes()
-        store.fetchDataRecords(ofTypes: types) { recs in
+        store.fetchDataRecords(ofTypes: types) { [weak self] recs in
             let mine = recs.filter { $0.displayName.contains("claude.ai") || $0.displayName.contains("anthropic.com") }
-            store.removeData(ofTypes: types, for: mine) {
-                DispatchQueue.main.async { self.usageState = "login"; self.appFive = nil; self.lastUsageJSON = nil; self.buildMenu(); self.pushUsage(); self.refreshTitle() }
+            store.removeData(ofTypes: types, for: mine) { [weak self] in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    writeLog("logged out of claude.ai (\(mine.count) site data records removed)")
+                    self.usageGen += 1 // also drop fetches that started while the data was being removed
+                    self.usageState = "login"; self.appFive = nil; self.lastUsageJSON = nil
+                    self.usageFailures = 0; self.usageNextTry = .distantPast; self.lastUsageError = ""
+                    self.buildMenu(); self.pushUsage(); self.refreshTitle()
+                }
             }
         }
     }
@@ -406,7 +472,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         guard let base = baseURL else { return }
         URLSession.shared.dataTask(with: base.appendingPathComponent("api/sessions")) { [weak self] data, _, _ in
             guard let self, let data, let list = try? JSONDecoder().decode([Session].self, from: data) else { return }
-            DispatchQueue.main.async { self.handle(list) }
+            let raw = String(data: data, encoding: .utf8) ?? "[]"
+            DispatchQueue.main.async { self.handle(list, raw: raw) }
         }.resume()
         URLSession.shared.dataTask(with: base.appendingPathComponent("api/usage")) { [weak self] data, _, _ in
             guard let self, let data, let u = try? JSONDecoder().decode(Usage.self, from: data) else { return }
@@ -415,6 +482,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
     var usage: Usage?
     var count = 0
+    var lastAllCount = -1
     func refreshTitle() {
         if serverDown { statusItem.button?.title = "⚠️"; return }
         var t = statusItem.button?.image == nil ? "🏢 \(count)" : " \(count)"
@@ -422,27 +490,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         else if let u = usage, u.ok, let f = u.fiveHour { t += " · \(max(0, 100 - Int(f.pct.rounded())))% \(L("남음", "left"))" }
         statusItem.button?.title = t
     }
-    func handle(_ list: [Session]) {
-        count = list.filter { $0.parentId == nil }.count; refreshTitle()
+    // Auto clock-out is decided by autoleave.js, the same file the office view uses. Running it here in JavaScriptCore keeps
+    // the menu bar count equal to the employees in the office, without a second copy of the rule that could drift apart.
+    lazy var leaveJS: JSContext? = {
+        guard let res = Bundle.main.resourcePath,
+              let src = try? String(contentsOfFile: (res as NSString).appendingPathComponent("server/public/autoleave.js"), encoding: .utf8),
+              let ctx = JSContext() else { writeLog("autoleave.js not loaded; the menu bar counts every session"); return nil }
+        ctx.evaluateScript(src)
+        ctx.evaluateScript("function presentParents(json, hours) { return splitGone(JSON.parse(json), hours).present.filter(function (s) { return !s.parentId; }).length; }")
+        if let e = ctx.exception { writeLog("autoleave.js failed: \(e)"); return nil }
+        return ctx
+    }()
+    // Sessions still in the office (not clocked out). Falls back to every top-level session when the script cannot run.
+    func officeCount(_ list: [Session], raw: String) -> Int {
+        let all = list.filter { $0.parentId == nil }.count
+        guard autoLeave > 0, let ctx = leaveJS, let f = ctx.objectForKeyedSubscript("presentParents") else { return all }
+        let v = f.call(withArguments: [raw, autoLeave])
+        if let e = ctx.exception { ctx.exception = nil; writeLog("autoleave count failed: \(e)"); return all }
+        guard let v, v.isNumber else { return all }
+        return Int(v.toInt32())
+    }
+    func handle(_ list: [Session], raw: String) {
+        let n = officeCount(list, raw: raw)
+        let all = list.filter { $0.parentId == nil }.count
+        // Logged only when it changes, so the log shows what the menu bar says and how many sessions auto clock-out sent home.
+        if n != count || all != lastAllCount { writeLog("menu bar count \(n) (\(all - n) of \(all) clocked out, auto clock-out \(autoLeave)h)"); lastAllCount = all }
+        count = n; refreshTitle()
+        let now = Date()
         for s in list {
-            let prev = lastStatus[s.sessionId]
-            if s.status == "busy", busySince[s.sessionId] == nil {
+            let id = s.sessionId, prev = lastStatus[id]
+            if s.status == "busy", busySince[id] == nil {
                 // Start from the time the session reported busy, so a session already working when the app launched is not under-counted.
-                var since = Date()
+                var since = now
                 if let ms = s.statusUpdatedAt, ms > 0 { let t = Date(timeIntervalSince1970: ms / 1000); if t < since { since = t } }
-                busySince[s.sessionId] = since
+                busySince[id] = since
             }
+            // A turn can stop for approval and then go on working. Only the working stretches are added up, so the time spent
+            // waiting for the user is not reported as work, and the work before the approval is not lost either.
+            if s.status != "busy", let since = busySince[id] { busyTotal[id, default: 0] += now.timeIntervalSince(since); busySince[id] = nil }
             if let prev, prev != s.status {
-                if s.status == "waiting" { notify(L("승인 요청", "Approval needed"), L("\(s.name): 확인이 필요합니다.", "\(s.name): needs your attention."), sessionId: s.sessionId) }
-                else if s.status == "idle", prev == "busy" {
-                    let secs = Int(Date().timeIntervalSince(busySince[s.sessionId] ?? Date()))
-                    if secs >= (s.parentId == nil ? minWorkSecs : minSubagentSecs) { notify(L("작업 완료", "Work finished"), L("\(s.name): \(secs / 60)분 \(secs % 60)초 동안 일했습니다.", "\(s.name): worked for \(secs / 60)m \(secs % 60)s."), sessionId: s.sessionId) }
+                if s.status == "waiting" { notify(L("승인 요청", "Approval needed"), L("\(s.name): 확인이 필요합니다.", "\(s.name): needs your attention."), sessionId: id, kind: "waiting") }
+                // The approval was answered (or the turn ended), so its notification no longer asks for anything.
+                if prev == "waiting" { clearApproval(id, reason: "\(s.name) is \(s.status)") }
+                if s.status == "idle", prev == "busy" {
+                    let secs = Int(busyTotal[id] ?? 0)
+                    if secs >= (s.parentId == nil ? minWorkSecs : minSubagentSecs) { notify(L("작업 완료", "Work finished"), L("\(s.name): \(secs / 60)분 \(secs % 60)초 동안 일했습니다.", "\(s.name): worked for \(secs / 60)m \(secs % 60)s."), sessionId: id, kind: "done") }
                 }
             }
-            if s.status != "busy" { busySince[s.sessionId] = nil }
-            lastStatus[s.sessionId] = s.status
+            if s.status == "idle" { busyTotal[id] = nil }
+            lastStatus[id] = s.status
         }
-        let ids = Set(list.map { $0.sessionId }); lastStatus = lastStatus.filter { ids.contains($0.key) }; busySince = busySince.filter { ids.contains($0.key) }
+        let ids = Set(list.map { $0.sessionId })
+        // A session that ended while it was waiting leaves no one to answer its approval notification.
+        for (id, st) in lastStatus where st == "waiting" && !ids.contains(id) { clearApproval(id, reason: "session \(id) ended") }
+        lastStatus = lastStatus.filter { ids.contains($0.key) }; busySince = busySince.filter { ids.contains($0.key) }; busyTotal = busyTotal.filter { ids.contains($0.key) }
     }
     // True when the current hour is inside the chosen quiet hours.
     func inQuietHours(_ now: Date = Date()) -> Bool {
@@ -451,13 +552,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let h = Calendar.current.component(.hour, from: now), a = parts[0], b = parts[1]
         return a <= b ? (h >= a && h < b) : (h >= a || h < b)
     }
-    func notify(_ title: String, _ body: String, sessionId: String) {
+    // Each session keeps at most one notification of each kind ("waiting" or "done"): a new one with the same identifier replaces
+    // the old one instead of piling up, and the session's notifications are grouped together in Notification Center.
+    func notify(_ title: String, _ body: String, sessionId: String, kind: String) {
         guard notifyEnabled else { writeLog("notification skipped (off): \(title)"); return }
         guard !inQuietHours() else { writeLog("notification skipped (quiet hours \(quietHours)): \(title)"); return }
         writeLog("notification sent: \(title) / \(body)")
         let c = UNMutableNotificationContent(); c.title = title; c.body = body; c.sound = .default
         c.userInfo = ["sessionId": sessionId]
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil))
+        c.threadIdentifier = sessionId
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "\(kind):\(sessionId)", content: c, trigger: nil)) { [weak self] e in
+            if let e { writeLog("notification failed: \(e.localizedDescription)") } else { self?.logDelivered(sessionId, after: "sent \(kind)") }
+        }
+    }
+    func clearApproval(_ sessionId: String, reason: String) {
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["waiting:\(sessionId)"])
+        logDelivered(sessionId, after: "approval cleared (\(reason))")
+    }
+    // Logs which notifications of the session are still in Notification Center. Removal finishes asynchronously, so it looks a moment later.
+    func logDelivered(_ sessionId: String, after what: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            UNUserNotificationCenter.current().getDeliveredNotifications { list in
+                let mine = list.filter { $0.request.content.threadIdentifier == sessionId }.map { $0.request.identifier.components(separatedBy: ":").first ?? "" }
+                writeLog("notifications for \(sessionId) after \(what): [\(mine.joined(separator: ", "))]")
+            }
+        }
     }
     // Show banners even while the app is in front, and jump to the session's terminal when a notification is clicked.
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void) {
