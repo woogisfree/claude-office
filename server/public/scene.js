@@ -38,8 +38,8 @@ function applySessions(list) {
       e = { id: s.sessionId, desk: deskOf.get(s.sessionId), look: look(s.sessionId), seed: hash(s.sessionId) % 50, x: -100, y: -100, path: [], visited: [], phase: 'enter', face: 'front', flip: false, surprise: 0, sulk: 0, hot: false, clickTimes: [], delay: spawned++ * 0.9 };
       emps.set(s.sessionId, e);
     }
-    e.leaving = false;
     e.data = s;
+    if (e.leaving) comeBack(e);
     e.parent = s.parentId ? byId.get(s.parentId) : null;
     const thr = fireThresholdK * 1000;
     if (s.weightedPerMin > thr) e.hot = true; else if (s.weightedPerMin < thr * 0.75) e.hot = false;
@@ -48,6 +48,8 @@ function applySessions(list) {
   for (const e of emps.values()) if (e.path.length === 0 && e.phase === 'enter' && e.x === -100) { e.path = entryPath(e); }
   for (const e of emps.values()) {
     if (!ids.has(e.id) && !e.leaving) {
+      // Where the employee was and what they were doing, in case the session comes back before they reach the door (see comeBack).
+      const before = { phase: e.phase, path: e.path, x: e.x, y: e.y };
       e.leaving = true; e.phase = 'leave';
       const d = deskPos(e.desk), s = seatPos(d);
       // Before reaching the seat, retrace the path already walked; at the seat, leave through the aisle.
@@ -58,9 +60,23 @@ function applySessions(list) {
       const last = e.path.length ? e.path[e.path.length - 1] : { x: e.x, y: e.y };
       e.leaveFromRest = last.x > d.x + 40;
       e.path = (e.visited.length && !e.seated ? trail : e.path.concat(exitRoute(d, s, e.leaveFromRest, last.x))).concat(out);
+      e.resume = { ...before, total: e.path.slice() };
       if (e.x === -100) { emps.delete(e.id); deskOf.delete(e.id); }
     }
   }
+}
+
+// The session came back while its employee was still walking out (auto clock-out turned off, a clocked-out session working again,
+// or one poll that missed the session). The employee walks back along the way they came, which keeps to the aisles,
+// and then carries on with what they were doing before (see the 'return' phase in step).
+function comeBack(e) {
+  e.leaving = false;
+  const r = e.resume; e.resume = null;
+  if (!r) { e.path = []; e.phase = e.data.status === 'idle' ? 'rest' : 'seated'; e.seated = true; return; }
+  // The exit path loses a point each time one is reached, so the points already passed are the start of the full path.
+  const walked = r.total.slice(0, r.total.length - e.path.length).reverse();
+  e.path = walked.concat([{ x: r.x, y: r.y }]);
+  e.phase = 'return'; e.resumeTo = { phase: r.phase, path: r.path };
 }
 
 function step(e, dt, nowMs) {
@@ -74,6 +90,8 @@ function step(e, dt, nowMs) {
       e.x = tg.x; e.y = tg.y; e.path.shift();
       if (tg.decide && !e.leaving && e.phase === 'enter') e.path = entryTail(e);
       if (!e.leaving && e.phase === 'enter') e.visited.push({ x: tg.x, y: tg.y });
+      // Back where they were when they started to leave: pick up the phase and the path they had then.
+      if (!e.path.length && e.phase === 'return') { const to = e.resumeTo; e.resumeTo = null; e.phase = to.phase; e.path = to.path.slice(); }
       if (!e.path.length) {
         if (e.leaving) { emps.delete(e.id); deskOf.delete(e.id); return; }
         if (e.phase === 'enter') { e.phase = e.dest === 'rest' ? 'rest' : 'seated'; e.seated = true; }
@@ -324,9 +342,12 @@ function resize() {
         const d = deskPos(e.desk), s = seatPos(d), p = e.leaveFromRest ? restPos(d) : s;
         e.x = p.x; e.y = p.y;
         e.path = exitRoute(d, s, e.leaveFromRest, p.x).concat([{ x: L.aisleX, y: L.corrY }, { x: L.doorX, y: L.corrY }, doorPos()]);
+        // If the session comes back, the way back now starts from that seat or recliner. The old trail has stale coordinates.
+        e.resume = { phase: e.leaveFromRest ? 'rest' : 'seated', path: [], x: p.x, y: p.y, total: e.path.slice() };
+        e.seated = true; e.visited = [];
         continue;
       }
-      if (e.path.length) { e.path = []; e.walking = false; if (e.phase === 'enter') { e.phase = e.data && e.data.status === 'idle' ? 'rest' : 'seated'; e.seated = true; } }
+      if (e.path.length) { e.path = []; e.walking = false; e.resumeTo = null; if (e.phase === 'enter' || e.phase === 'return') { e.phase = e.data && e.data.status === 'idle' ? 'rest' : 'seated'; e.seated = true; } }
       const d = deskPos(e.desk), p = e.phase === 'rest' ? restPos(d) : seatPos(d); e.x = p.x; e.y = p.y;
     }
   }
