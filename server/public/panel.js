@@ -74,7 +74,10 @@ function renderCards(list) {
   const officeLabel = tr('officeLabel', top.length, nOf('waiting'), nOf('busy'), nOf('idle'));
   if ($('#office').getAttribute('aria-label') !== officeLabel) $('#office').setAttribute('aria-label', officeLabel);
   // Project filter list
-  const sel = $('#fProject'), projects = [...new Set(list.filter((s) => !s.parentId).map(projOf))].sort();
+  // The chosen project stays in the list even when none of its sessions is running (the choice is remembered across launches),
+  // so the select shows which filter hides the cards and it can be set back to All.
+  const running = [...new Set(list.filter((s) => !s.parentId).map(projOf))];
+  const sel = $('#fProject'), projects = (fProject !== 'all' && !running.includes(fProject) ? running.concat(fProject) : running).sort();
   const want = ['all', ...projects].join('|');
   if (sel.dataset.sig !== want) {
     sel.dataset.sig = want;
